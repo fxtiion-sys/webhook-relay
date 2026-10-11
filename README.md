@@ -30,7 +30,7 @@ The schema already includes columns for idempotency, retries, signing secrets, a
 | Testing | Spring Boot context smoke test (H2) |
 | CI | GitHub Actions |
 
-**Planned:** Testcontainers, WireMock, Micrometer/Prometheus, k6, and an HTTPS deployment with Docker Compose.
+**Planned:** Spring Data JPA for entities and repositories, Testcontainers, WireMock, Micrometer/Prometheus, k6, and an HTTPS deployment with Docker Compose.
 
 ## Delivery architecture (planned)
 
@@ -89,11 +89,11 @@ The partial indexes keep completed delivery history out of the active-job indexe
 
 **PostgreSQL as both store and queue.** Writing events and jobs to the same database makes transactional enqueueing possible without a separate broker. The tradeoff is polling overhead and extra database load, which will need to be measured under realistic workloads.
 
-**Immutable, versioned migrations.** Applied migrations are never edited. Every schema change goes into a new version so the schema history stays reproducible.
+**Flyway owns the schema.** Applied migrations are never edited, and every schema change goes into a new version so the schema history stays reproducible. When JPA entities are added, Hibernate will run with `ddl-auto=validate`: it checks that the entities match the schema but never changes it.
 
 **Text status with a CHECK constraint.** The database rejects unknown statuses, and new states can be added through an explicit migration. Valid transitions between states are enforced in application code.
 
-**Sign the bytes that are sent.** `jsonb` normalizes JSON and does not keep the original bytes so the sender will compute the signature over the exact serialized body it transmits, not over the stored payload.
+**Sign the bytes that are sent.** `jsonb` normalizes JSON and does not keep the original bytes, so the sender will compute the signature over the exact serialized body it transmits, not over the stored payload.
 
 ## Run locally
 
@@ -148,7 +148,7 @@ Flyway applies migrations on startup. On a fresh database, `V1` initializes the 
 curl http://localhost:8080/actuator/health
 ```
 
-The response should report `UP`. Add API examples for the event and endpoint APIs.
+The response should report `UP`. API examples will be added with the event and endpoint APIs.
 
 ### 5. Stop
 
