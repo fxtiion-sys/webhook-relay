@@ -40,3 +40,7 @@ out/
 
 # Keep the Gradle Wrapper JAR
 !gradle/wrapper/gradle-wrapper.jar
+
+# VS Code settings and generated output
+.vscode/
+bin/
