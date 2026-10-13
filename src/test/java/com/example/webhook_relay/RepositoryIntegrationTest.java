@@ -29,6 +29,8 @@ import com.example.webhook_relay.entity.DeliveryAttempt;
 import com.example.webhook_relay.repository.DeliveryAttemptRepository;
 import java.time.Instant;
 
+import java.time.temporal.ChronoUnit;
+
 @SpringBootTest
 @Testcontainers
 class RepositoryIntegrationTest {
@@ -70,7 +72,8 @@ class RepositoryIntegrationTest {
                 new Delivery(event, endpoint)
         );
 
-        Instant attemptedAt = Instant.now();
+        Instant attemptedAt = Instant.now()
+                .truncatedTo(ChronoUnit.MICROS);
 
         DeliveryAttempt attempt = new DeliveryAttempt(
                 delivery,
