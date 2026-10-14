@@ -1,11 +1,6 @@
 package com.example.webhook_relay;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import com.example.webhook_relay.entity.Endpoint;
 import com.example.webhook_relay.repository.EndpointRepository;
@@ -31,14 +26,7 @@ import java.time.Instant;
 
 import java.time.temporal.ChronoUnit;
 
-@SpringBootTest
-@Testcontainers
-class RepositoryIntegrationTest {
-
-    @Container
-    @ServiceConnection
-    static PostgreSQLContainer postgres =
-            new PostgreSQLContainer("postgres:16-alpine");
+class RepositoryIntegrationTest extends PostgresIntegrationTest {
 
     @Test
     void contextLoads() {
