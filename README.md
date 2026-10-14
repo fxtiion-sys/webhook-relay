@@ -11,6 +11,8 @@ Webhook Relay stores events from a producer and delivers them to subscribed HTTP
 - **Application:** Spring Boot with Web, Validation, and Actuator; separate `local` and `test` profiles; local credentials supplied through environment variables.
 - **Database:** PostgreSQL 17 in Docker Compose with a named volume, a readiness healthcheck, and localhost-only port binding.
 - **Schema:** Flyway-versioned migrations creating four tables with primary keys, foreign keys, uniqueness rules, CHECK constraints, and partial indexes for the job queue.
+- **Persistence:** Four JPA entities and Spring Data repositories mapped to the Flyway-managed PostgreSQL schema, including JSONB and PostgreSQL array fields.
+- **Integration testing:** PostgreSQL 17 integration tests using Testcontainers, covering repository persistence, schema migrations, constraints, and partial indexes.
 - **Workflow:** Gradle Wrapper, GitHub Actions build, pull-request workflow with a PR template, main branch protection, and Dependabot.
 
 The schema already includes columns for idempotency, retries, signing secrets, and worker leases. The application logic that uses them is planned.
@@ -22,15 +24,15 @@ The schema already includes columns for idempotency, retries, signing secrets, a
 | Language | Java 21 |
 | Framework | Spring Boot 4.1.1 |
 | Build | Gradle Wrapper |
-| Database access | Spring JDBC, PostgreSQL JDBC driver |
+| Database access | Spring Data JPA, Spring JDBC, PostgreSQL JDBC driver |
 | Database | PostgreSQL 17 |
 | Schema migrations | Flyway |
 | Local infrastructure | Docker Compose |
 | Health endpoint | Spring Boot Actuator |
-| Testing | Spring Boot context smoke test (H2) |
+| Testing | JUnit 5, Spring Boot Test, Testcontainers (PostgreSQL 17) |
 | CI | GitHub Actions |
 
-**Planned:** Spring Data JPA for entities and repositories, Testcontainers, WireMock, Micrometer/Prometheus, k6, and an HTTPS deployment with Docker Compose.
+**Planned:** WireMock, Micrometer/Prometheus, k6, and an HTTPS deployment with Docker Compose.
 
 ## Delivery architecture (planned)
 
@@ -89,7 +91,7 @@ The partial indexes keep completed delivery history out of the active-job indexe
 
 **PostgreSQL as both store and queue.** Writing events and jobs to the same database makes transactional enqueueing possible without a separate broker. The tradeoff is polling overhead and extra database load, which will need to be measured under realistic workloads.
 
-**Flyway owns the schema.** Applied migrations are never edited, and every schema change goes into a new version so the schema history stays reproducible. When JPA entities are added, Hibernate will run with `ddl-auto=validate`: it checks that the entities match the schema but never changes it.
+**Flyway owns the schema.** Applied migrations are never edited, and every schema change goes into a new version so the schema history stays reproducible. Hibernate runs with `ddl-auto=validate`, checking that JPA entities match the schema without modifying it.
 
 **Text status with a CHECK constraint.** The database rejects unknown statuses, and new states can be added through an explicit migration. Valid transitions between states are enforced in application code.
 
@@ -162,27 +164,35 @@ The database volume is kept. `docker compose down -v` deletes it along with all 
 
 ## Testing
 
+Integration tests run against a real PostgreSQL 17 instance managed by Testcontainers. Docker must be running, but no manually configured test database is required.
+
 ```bash
-./gradlew test
-./gradlew build
+./gradlew clean test
+./gradlew clean build
 ```
 
-The current automated test is a context smoke test using the `test` profile and H2. Flyway is disabled in that profile, so it does **not** cover the PostgreSQL migrations or PostgreSQL-specific behaviour.
+The test suite covers:
 
-Verified manually so far:
+- **JPA persistence:** Saving and retrieving entities through Spring Data repositories, including JSONB payloads, relationships, and delivery attempts.
+- **Flyway migrations:** Successful application of V1 and V2 and creation of all four tables.
+- **Uniqueness:** Idempotency keys, event-endpoint delivery pairs, and delivery-attempt numbers.
+- **Foreign keys:** Rejection of deliveries and attempts referencing nonexistent records.
+- **Data integrity:** JSON object payloads, valid delivery statuses, lease requirements, numeric ranges, and nonblank required values.
+- **Indexes:** Verification of the two partial indexes used for pending deliveries and expired worker leases.
 
-- Application startup, database connectivity, and an `UP` health response.
-- Flyway `V1` and `V2` recorded in `flyway_schema_history`; an applied migration is not rerun after restart.
-- Tables, constraints, and indexes inspected with `psql`.
+Tests use a shared Spring-managed Testcontainers configuration. Hibernate validates the database schema; Flyway remains responsible for creating and updating it.
 
-PostgreSQL integration tests, receiver-failure and worker-recovery tests, and load measurements are planned. No throughput or latency numbers are published yet.
+GitHub Actions runs the Gradle build, including integration tests.
+
+Receiver-failure tests, worker-recovery tests, and load measurements are planned. No throughput or latency numbers are published yet.
 
 ## Roadmap
 
 - [x] Spring Boot foundation, CI, and repository workflow
 - [x] Local PostgreSQL with Docker Compose
 - [x] Database schema, constraints, and indexes with Flyway
-- [ ] PostgreSQL integration tests with Testcontainers
+- [x] JPA entities and Spring Data repositories
+- [x] PostgreSQL integration tests with Testcontainers
 - [ ] Endpoint registration and event ingestion with transactional job creation
 - [ ] API-level idempotency
 - [ ] HTTP delivery with concurrent worker claiming
