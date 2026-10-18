@@ -91,5 +91,9 @@ public class Endpoint {
         return createdAt;
     }
 
+    // 4. State changes
+    public void deactivate() {
+        this.active = false;
+    }
 
 }
