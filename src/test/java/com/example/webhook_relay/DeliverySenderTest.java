@@ -67,7 +67,7 @@ class DeliverySenderTest {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (IOException e) {
-                // The client may disconnect after a timeout.
+                // Client may disconnect after timeout.
             } finally {
                 exchange.close();
             }
@@ -96,6 +96,7 @@ class DeliverySenderTest {
 
         System.out.println("Status: " + result.statusCode());
         System.out.println("Error: " + result.error());
+        System.out.println("Duration: " + result.durationMs() + "ms");
 
         assertEquals(200, result.statusCode());
         assertNull(result.error());
@@ -111,6 +112,7 @@ class DeliverySenderTest {
 
         System.out.println("Status: " + result.statusCode());
         System.out.println("Error: " + result.error());
+        System.out.println("Duration: " + result.durationMs() + "ms");
 
         assertEquals(500, result.statusCode());
         assertNotNull(result.error());
