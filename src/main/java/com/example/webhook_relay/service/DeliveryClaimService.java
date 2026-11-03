@@ -1,0 +1,89 @@
+
+package com.example.webhook_relay.service;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+
+@Service
+public class DeliveryClaimService {
+
+    private final JdbcTemplate jdbcTemplate;
+
+    private static final int BATCH_SIZE = 10;
+    private static final Duration LEASE_DURATION =
+            Duration.ofSeconds(30);
+
+    public DeliveryClaimService(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    public record ClaimedDelivery(
+            UUID id,
+            String url,
+            String body,
+            int attemptNo,
+            Instant lockedUntil
+    ) {}
+
+    @Transactional
+    public List<ClaimedDelivery> claimDeliveries() {
+
+        String sql = """
+            WITH candidates AS (
+                SELECT id
+                FROM deliveries
+                WHERE
+                    (status = 'PENDING'
+                     AND next_attempt_at <= now())
+                    OR
+                    (status = 'IN_PROGRESS'
+                     AND locked_until < now())
+                ORDER BY next_attempt_at, id
+                LIMIT ?
+                FOR UPDATE SKIP LOCKED
+            ),
+            claimed AS (
+                UPDATE deliveries d
+                SET status = 'IN_PROGRESS',
+                    locked_until = ?,
+                    attempt_count = d.attempt_count + 1,
+                    updated_at = now()
+                FROM candidates c
+                WHERE d.id = c.id
+                RETURNING d.id, d.endpoint_id,
+                          d.event_id, d.attempt_count, d.locked_until
+            )
+            SELECT c.id,
+                   ep.url,
+                   ev.payload::text AS body,
+                   c.attempt_count,
+                   c.locked_until
+            FROM claimed c
+            JOIN endpoints ep ON ep.id = c.endpoint_id
+            JOIN events ev ON ev.id = c.event_id
+            """;
+
+        Instant leaseUntil =
+                Instant.now().plus(LEASE_DURATION);
+
+        return jdbcTemplate.query(
+                sql,
+                (rs, rowNum) -> new ClaimedDelivery(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("url"),
+                        rs.getString("body"),
+                        rs.getInt("attempt_count"),
+                        rs.getTimestamp("locked_until")
+                                .toInstant()
+                ),
+                BATCH_SIZE,
+                java.sql.Timestamp.from(leaseUntil)
+        );
+    }
+}
