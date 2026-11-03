@@ -3,28 +3,25 @@ package com.example.webhook_relay;
 
 import com.example.webhook_relay.dto.DeliveryResult;
 import com.example.webhook_relay.service.DeliverySender;
+import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.*;
-
-import com.sun.net.httpserver.HttpServer;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.AfterAll;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.concurrent.Executors;
 
+import static org.junit.jupiter.api.Assertions.*;
 
 class DeliverySenderTest {
 
-    private final DeliverySender sender =
-            new DeliverySender();
-
     private static HttpServer server;
     private static String baseUrl;
+
+    private final DeliverySender sender = new DeliverySender();
 
     @BeforeAll
     static void startServer() throws IOException {
@@ -66,6 +63,7 @@ class DeliverySenderTest {
                 try (var output = exchange.getResponseBody()) {
                     output.write(response);
                 }
+
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (IOException e) {
@@ -90,7 +88,6 @@ class DeliverySenderTest {
 
     @Test
     void sendWebhook() {
-
         DeliveryResult result = sender.send(
                 baseUrl + "/mock-receiver",
                 "{\"message\":\"Hello from Java!\"}",
@@ -136,5 +133,4 @@ class DeliverySenderTest {
         assertNull(result.statusCode());
         assertNotNull(result.error());
     }
-
 }
