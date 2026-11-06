@@ -2,20 +2,29 @@
 
 A webhook delivery service built with Java 21, Spring Boot, and PostgreSQL.
 
-Webhook Relay stores events from a producer and delivers them to subscribed HTTP endpoints with retries, worker recovery, and request signing. PostgreSQL serves as both the event store and the work queue, so an event and its delivery jobs can be written in a single transaction without a separate message broker.
+Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoints, and processes them asynchronously using a database-backed worker. PostgreSQL acts as both the event store and the work queue, enabling transactional event ingestion without a separate message broker.
 
-> **Status: In development.** The application foundation, local PostgreSQL environment, and database schema are complete. Event ingestion and webhook delivery are the next steps. There is no deployed demo yet.
+> **Status: v0.1 local MVP implemented.** Event ingestion, endpoint registration, asynchronous HTTP delivery, retries, lease recovery, delivery history APIs, and a runnable end-to-end demo are available locally. A public deployment is not yet available.
 
 ## What's implemented
 
-- **Application:** Spring Boot with Web, Validation, and Actuator; separate `local` and `test` profiles; local credentials supplied through environment variables.
-- **Database:** PostgreSQL 17 in Docker Compose with a named volume, a readiness healthcheck, and localhost-only port binding.
-- **Schema:** Flyway-versioned migrations creating four tables with primary keys, foreign keys, uniqueness rules, CHECK constraints, and partial indexes for the job queue.
-- **Persistence:** Four JPA entities and Spring Data repositories mapped to the Flyway-managed PostgreSQL schema, including JSONB and PostgreSQL array fields.
-- **Integration testing:** PostgreSQL 17 integration tests using Testcontainers, covering repository persistence, schema migrations, constraints, and partial indexes.
-- **Workflow:** Gradle Wrapper, GitHub Actions build, pull-request workflow with a PR template, main branch protection, and Dependabot.
+- **Application:** Spring Boot 4.1.1 with REST APIs, Bean Validation, Actuator, and separate `local` and `test` profiles.
+- **Database:** PostgreSQL 17 managed through Docker Compose, with Flyway migrations and Spring Data JPA.
+- **Endpoint registration:** Register HTTP endpoints and subscribe them to event types.
+- **Event ingestion:** Accept events and create delivery jobs for subscribed endpoints within a database transaction.
+- **Delivery worker:** Poll for eligible deliveries, claim jobs using `FOR UPDATE SKIP LOCKED`, and send HTTP POST requests.
+- **Retry and recovery:** Retry failed deliveries, reclaim expired leases, and reject stale worker results.
+- **Delivery history API:** List deliveries with status filtering, endpoint filtering, and pagination; retrieve individual deliveries with their attempt history.
+- **Testing:** JUnit 5 and Testcontainers integration tests covering database integrity, worker concurrency, lease recovery, and delivery queries.
+- **Local demo:** `scripts/demo.sh` demonstrates endpoint registration, event publishing, worker processing, and delivery history retrieval.
+- **Development workflow:** Gradle Wrapper, GitHub Actions, pull requests, branch protection, and Dependabot.
 
-The schema already includes columns for idempotency, retries, signing secrets, and worker leases. The application logic that uses them is planned.
+## Current limitations
+
+- No publicly deployed demo.
+- Load testing and production performance benchmarks have not been completed.
+- Additional features, including manual replay, configurable exponential backoff, and delivery metrics, remain on the roadmap.
+- Request signing is not yet documented as a verified end-to-end feature.
 
 ## Technology
 
@@ -34,25 +43,49 @@ The schema already includes columns for idempotency, retries, signing secrets, a
 
 **Planned:** WireMock, Micrometer/Prometheus, k6, and an HTTPS deployment with Docker Compose.
 
-## Delivery architecture (planned)
+## Delivery architecture
 
 ```mermaid
 flowchart TD
-    Producer[Event producer] -->|"Submit event"| API[Spring Boot API]
-    API -->|"Event + delivery jobs in one transaction"| DB[(PostgreSQL)]
-    Workers[Workers x N] -->|"Claim due jobs (FOR UPDATE SKIP LOCKED)"| DB
-    Workers -->|"Signed HTTP POST"| Receiver[Subscribed endpoint]
-    Workers -->|"Record attempt, schedule retry"| DB
+    Producer[Event Producer] -->|POST /events| API[Spring Boot API]
+    API -->|Store event and delivery jobs| DB[(PostgreSQL)]
+    Worker[Scheduled Delivery Worker] -->|Claim eligible jobs| DB
+    Worker -->|HTTP POST| Receiver[Subscribed Endpoint]
+    Receiver -->|HTTP Response| Worker
+    Worker -->|Record result and retry state| DB
+    Client[API Client] -->|GET /deliveries| API
+    API -->|Query delivery history| DB
 ```
 
-1. The API stores an event and one delivery job per subscribed endpoint in a single transaction.
-2. Workers claim due jobs with `SELECT ... FOR UPDATE SKIP LOCKED`, so multiple workers can poll the same table without claiming the same job.
-3. Each claim sets a lease. If a worker crashes, the lease expires and the job becomes eligible for recovery.
-4. Workers send the signed request, record the attempt, and either mark the job complete or schedule a retry.
+### Delivery workflow
+
+1. **Endpoint registration:** Clients register an HTTP endpoint and subscribe to event types using `POST /endpoints`.
+2. **Event ingestion:** Producers publish events through `POST /events`. The application stores the event and creates delivery jobs for matching endpoints in a database transaction.
+3. **Worker polling:** A scheduled worker periodically queries PostgreSQL for eligible deliveries.
+4. **Concurrent claiming:** Workers use `SELECT ... FOR UPDATE SKIP LOCKED` to claim available jobs without claiming the same job concurrently.
+5. **HTTP delivery:** The worker sends an HTTP POST request to the registered endpoint.
+6. **Result recording:** Successful responses mark the delivery as `SUCCEEDED`. Failed attempts are recorded and eligible deliveries are scheduled for retry.
+7. **Lease recovery:** Expired worker leases allow interrupted deliveries to be reclaimed. Ownership checks prevent stale workers from overwriting newer results.
+8. **Delivery inspection:** Clients can retrieve delivery status, pagination results, and attempt history using the delivery query APIs.
 
 ### Delivery guarantee
 
-The target is **at-least-once delivery**. A receiver may process a request before the worker records success, so a retry can deliver the same event again. Receivers should deduplicate using the stable event ID. Database uniqueness on jobs cannot guarantee exactly-once processing at the receiver.
+The system follows an **at-least-once delivery model**.
+
+A receiver may process a webhook before the worker records the successful result. If the worker crashes during this interval, the delivery can be retried.
+
+Therefore, receivers should implement idempotent processing to handle duplicate webhook deliveries safely.
+
+### Concurrency and reliability
+
+- **Database-backed queue:** PostgreSQL stores both events and delivery jobs.
+- **Row-level locking:** `FOR UPDATE SKIP LOCKED` enables concurrent workers to claim different jobs.
+- **Lease-based recovery:** Expired leases allow unfinished work to be reclaimed.
+- **Fencing checks:** Stale worker results are rejected when ownership has changed.
+- **Attempt history:** HTTP status codes, errors, and durations are recorded for delivery inspection.
+
+Worker concurrency and expired-lease recovery are covered by integration tests using PostgreSQL and Testcontainers.
+
 
 ## Data model
 
@@ -152,57 +185,228 @@ curl http://localhost:8080/actuator/health
 
 The response should report `UP`. API examples will be added with the event and endpoint APIs.
 
-### 5. Stop
 
-Stop the application with `Ctrl+C`, then:
+### 5. Run the end-to-end demo
+
+The demo script creates an endpoint, publishes an event, waits for the delivery worker, and retrieves the delivery result and attempt history.
+
+**Prerequisites:** The application and PostgreSQL must be running. Install `curl` and `jq` before running the demo.
+
+```bash
+chmod +x scripts/demo.sh
+./scripts/demo.sh
+```
+
+The script performs the following steps:
+
+1. Registers a webhook endpoint using `POST /endpoints`.
+2. Publishes an event using `POST /events`.
+3. Waits for the delivery worker to process the event.
+4. Retrieves the delivery status and attempt history.
+
+Expected output:
+
+```text
+=== Webhook Relay Demo ===
+
+[1/4] Creating endpoint...
+Endpoint ID: <generated-uuid>
+
+[2/4] Publishing event...
+Event ID: <generated-uuid>
+
+[3/4] Waiting for delivery...
+Delivery ID: <generated-uuid>
+Status: SUCCEEDED
+
+[4/4] Fetching delivery details...
+{
+  "delivery": {
+    "status": "SUCCEEDED",
+    "attemptCount": 1,
+    "lastStatusCode": 200
+  },
+  "attempts": [
+    {
+      "attemptNo": 1,
+      "statusCode": 200
+    }
+  ]
+}
+
+=== Demo completed successfully ===
+```
+
+The JSON shown above is abbreviated. Actual responses also include IDs, timestamps, and other delivery metadata.
+
+### 6. API endpoints
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| POST | `/endpoints` | Register a webhook endpoint |
+| GET | `/endpoints/{id}` | Retrieve endpoint information |
+| POST | `/events` | Publish an event and create delivery jobs |
+| GET | `/deliveries` | List deliveries with optional filters and pagination |
+| GET | `/deliveries/{id}` | Retrieve a delivery and its attempt history |
+| POST | `/mock-receiver` | Local receiver for testing HTTP delivery |
+| GET | `/actuator/health` | Check application health |
+
+#### Create an endpoint
+
+```bash
+curl -X POST http://localhost:8080/endpoints \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "http://localhost:8080/mock-receiver",
+    "eventTypes": ["order.created"]
+  }'
+```
+
+#### Publish an event
+
+```bash
+curl -X POST http://localhost:8080/events \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "order.created",
+    "payload": {
+      "orderId": 123
+    }
+  }'
+```
+
+#### List deliveries
+
+```bash
+curl "http://localhost:8080/deliveries?page=0&size=10"
+```
+
+Filter by status:
+
+```bash
+curl "http://localhost:8080/deliveries?status=SUCCEEDED"
+```
+
+Filter by endpoint:
+
+```bash
+curl "http://localhost:8080/deliveries?endpointId=<endpoint-uuid>"
+```
+
+#### Retrieve delivery details
+
+```bash
+curl "http://localhost:8080/deliveries/<delivery-uuid>"
+```
+
+The response includes delivery metadata and an `attempts` array ordered by attempt number.
+
+### 7. Stop
+
+Stop the Spring Boot application with `Ctrl+C`, then run:
 
 ```bash
 docker compose stop
 ```
 
-The database volume is kept. `docker compose down -v` deletes it along with all data.
+The database volume is preserved. Running `docker compose down -v` deletes the database volume and its data.
+
 
 ## Testing
 
-Integration tests run against a real PostgreSQL 17 instance managed by Testcontainers. Docker must be running, but no manually configured test database is required.
+
+## Testing
+
+Integration tests run against PostgreSQL 17 using Testcontainers. Docker must be running, but no manually configured test database is required.
+
+### Run tests
+
+Run the complete test suite:
 
 ```bash
 ./gradlew clean test
+```
+
+Run the full build:
+
+```bash
 ./gradlew clean build
 ```
 
-The test suite covers:
+Run delivery query integration tests only:
 
-- **JPA persistence:** Saving and retrieving entities through Spring Data repositories, including JSONB payloads, relationships, and delivery attempts.
-- **Flyway migrations:** Successful application of V1 and V2 and creation of all four tables.
-- **Uniqueness:** Idempotency keys, event-endpoint delivery pairs, and delivery-attempt numbers.
-- **Foreign keys:** Rejection of deliveries and attempts referencing nonexistent records.
-- **Data integrity:** JSON object payloads, valid delivery statuses, lease requirements, numeric ranges, and nonblank required values.
-- **Indexes:** Verification of the two partial indexes used for pending deliveries and expired worker leases.
+```bash
+./gradlew test --tests "*DeliveryQueryIntegrationTest"
+```
 
-Tests use a shared Spring-managed Testcontainers configuration. Hibernate validates the database schema; Flyway remains responsible for creating and updating it.
+### Test coverage
 
-GitHub Actions runs the Gradle build, including integration tests.
+The integration test suite covers:
 
-Receiver-failure tests, worker-recovery tests, and load measurements are planned. No throughput or latency numbers are published yet.
+- **Persistence:** JPA entity mappings, JSONB payloads, relationships, and repository operations.
+- **Database schema:** Flyway migrations, foreign keys, uniqueness constraints, CHECK constraints, and indexes.
+- **Event ingestion:** Event creation and transactional delivery job creation.
+- **HTTP delivery:** Sending webhook requests and recording delivery outcomes.
+- **Worker concurrency:** Multiple workers claiming jobs without duplicate ownership.
+- **Lease recovery:** Reclaiming expired leases and rejecting stale worker results.
+- **Delivery queries:** Status filtering, endpoint filtering, and pagination.
+- **Delivery details:** Retrieving delivery metadata and attempt history in ascending attempt-number order.
+- **Error handling:** Returning a not-found error for nonexistent deliveries.
+
+The `DeliveryQueryIntegrationTest` class includes seven tests covering delivery queries, pagination, attempt history, and missing delivery handling.
+
+### Test reports
+
+Gradle generates an HTML test report after running the test suite.
+
+On macOS:
+
+```bash
+open build/reports/tests/test/index.html
+```
+
+GitHub Actions also runs the Gradle build and integration tests.
+
+### Testing limitations
+
+- Production-scale throughput and latency have not been benchmarked.
+- The delivery query tests primarily verify service-layer behavior; HTTP response behavior has also been manually tested.
+- Additional automated end-to-end and failure-injection tests are planned.
+
 
 ## Roadmap
+
+### Completed
 
 - [x] Spring Boot foundation, CI, and repository workflow
 - [x] Local PostgreSQL with Docker Compose
 - [x] Database schema, constraints, and indexes with Flyway
 - [x] JPA entities and Spring Data repositories
 - [x] PostgreSQL integration tests with Testcontainers
-- [ ] Endpoint registration and event ingestion with transactional job creation
-- [ ] API-level idempotency
-- [ ] HTTP delivery with concurrent worker claiming
-- [ ] Exponential backoff with jitter, terminal `DEAD` state, and manual replay
-- [ ] Lease recovery and ownership checks for stale worker results
-- [ ] HMAC-SHA256 request signatures with timestamps
-- [ ] Delivery metrics and reproducible k6 results
-- [ ] Receiver-outage and worker-crash tests
-- [ ] Delivery history UI and HTTPS demo deployment
+- [x] Endpoint registration API
+- [x] Event ingestion with transactional delivery job creation
+- [x] Asynchronous HTTP webhook delivery
+- [x] Concurrent worker claiming with `FOR UPDATE SKIP LOCKED`
+- [x] Retry handling for failed deliveries
+- [x] Expired lease recovery and stale worker result rejection
+- [x] Delivery list API with filtering and pagination
+- [x] Delivery detail API with attempt history
+- [x] Worker concurrency and delivery query integration tests
+- [x] End-to-end demo script
 
-**Out of scope for now:** Kafka/SQS, Kubernetes, a client SDK, and multi-tenant authentication.
+### Planned
 
-Progress is tracked in [Issues](https://github.com/fxtiion-sys/webhook-relay/issues) and [Milestones](https://github.com/fxtiion-sys/webhook-relay/milestones).
+- [ ] Configurable exponential backoff with jitter
+- [ ] Manual delivery replay
+- [ ] HMAC-SHA256 request signing with timestamps
+- [ ] Delivery metrics and monitoring
+- [ ] Reproducible load testing with k6
+- [ ] Additional receiver-outage and worker-crash tests
+- [ ] HTTPS demo deployment
+- [ ] Delivery history UI
+
+### Out of scope for v0.1
+
+Kafka/SQS, Kubernetes, a client SDK, and multi-tenant authentication.
+
+Progress is tracked in [GitHub Issues](https://github.com/fxtiion-sys/webhook-relay/issues) and [Milestones](https://github.com/fxtiion-sys/webhook-relay/milestones).
