@@ -10,13 +10,26 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.example.webhook_relay.retry.DeliveryOutcome;
+import com.example.webhook_relay.retry.FailureClassifier;
+import com.example.webhook_relay.retry.RetryPolicy;
+
+import java.time.Duration;
+
 @Service
 public class DeliveryResultService {
 
     private final JdbcTemplate jdbcTemplate;
+    private final RetryPolicy retryPolicy;
+    private final FailureClassifier failureClassifier;
 
-    public DeliveryResultService(JdbcTemplate jdbcTemplate) {
+    public DeliveryResultService(
+            JdbcTemplate jdbcTemplate,
+            RetryPolicy retryPolicy
+    ) {
         this.jdbcTemplate = jdbcTemplate;
+        this.retryPolicy = retryPolicy;
+        this.failureClassifier = new FailureClassifier();
     }
 
     @Transactional
@@ -28,11 +41,20 @@ public class DeliveryResultService {
     ) {
         Integer statusCode = result.statusCode();
 
-        boolean success = statusCode != null
-                && statusCode >= 200
-                && statusCode < 300;
+        DeliveryOutcome outcome = failureClassifier.classify(result);
 
-        String newStatus = success ? "SUCCEEDED" : "PENDING";
+        String newStatus;
+        Duration retryDelay = null;
+
+        if (outcome == DeliveryOutcome.SUCCESS) {
+            newStatus = "SUCCEEDED";
+        } else if (outcome == DeliveryOutcome.PERMANENT_FAILURE
+                || attemptNo >= retryPolicy.maxAttempts()) {
+            newStatus = "DEAD";
+        } else {
+            newStatus = "PENDING";
+            retryDelay = retryPolicy.nextDelay(attemptNo);
+        }
 
         String sql = """
             UPDATE deliveries
@@ -42,7 +64,7 @@ public class DeliveryResultService {
                 last_error = ?,
                 next_attempt_at = CASE
                     WHEN ? = 'PENDING'
-                    THEN now() + interval '5 seconds'
+                    THEN now() + (? * interval '1 millisecond')
                     ELSE next_attempt_at
                 END,
                 updated_at = now()
@@ -52,12 +74,17 @@ public class DeliveryResultService {
               AND locked_until = ?
             """;
 
+        Long retryDelayMillis = retryDelay == null
+                ? null
+                : retryDelay.toMillis();
+
         int updated = jdbcTemplate.update(
                 sql,
                 newStatus,
                 statusCode,
                 result.error(),
                 newStatus,
+                retryDelayMillis,
                 deliveryId,
                 attemptNo,
                 Timestamp.from(lockedUntil)
