@@ -22,9 +22,12 @@ public class EventController {
 
     @PostMapping
     public ResponseEntity<CreateEventResponse> createEvent(
-            @Valid @RequestBody CreateEventRequest request
+            @Valid @RequestBody CreateEventRequest request,
+            @RequestHeader(value = "Idempotency-Key", required = false)
+            String idempotencyKey
     ) {
-        CreateEventResponse response = eventService.createEvent(request);
+        CreateEventResponse response =
+                eventService.createEvent(request, idempotencyKey);
 
         return ResponseEntity
                 .status(HttpStatus.ACCEPTED)

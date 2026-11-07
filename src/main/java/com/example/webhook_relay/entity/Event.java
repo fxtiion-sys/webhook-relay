@@ -46,6 +46,7 @@ public class Event {
     public Event(String type, JsonNode payload) {
         this.type = type;
         this.payload = payload.deepCopy();
+        this.idempotencyKey = idempotencyKey;
     }
 
     // Getter
@@ -63,6 +64,10 @@ public class Event {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public String getIdempotencyKey() {
+        return idempotencyKey;
     }
 
 }

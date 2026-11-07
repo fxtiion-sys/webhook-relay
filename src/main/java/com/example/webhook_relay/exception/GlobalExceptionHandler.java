@@ -55,4 +55,32 @@ public class GlobalExceptionHandler {
                 .status(HttpStatus.NOT_FOUND)
                 .body(response);
     }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleBadRequest(
+            IllegalArgumentException ex
+    ) {
+        return ResponseEntity
+                .badRequest()
+                .body(new ErrorResponse(
+                        400,
+                        ex.getMessage(),
+                        List.of()
+                ));
+    }
+
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ResponseEntity<ErrorResponse> handleConflict(
+            IdempotencyConflictException ex
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse(
+                        409,
+                        ex.getMessage(),
+                        List.of()
+                ));
+    }
+
+
 }
