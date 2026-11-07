@@ -305,4 +305,79 @@ class DeliveryQueryIntegrationTest extends PostgresIntegrationTest {
         assertTrue(exception.getReason().contains("Delivery not found"));
     }
 
+    @Test
+    void shouldReturnOnlyDeadDeliveries() {
+        // Arrange
+        UUID deadId = createDelivery("DEAD");
+        createDelivery("SUCCEEDED");
+
+        // Act
+        Page<DeliveryResponse> result =
+                deliveryQueryService.getDeliveries(
+                        "DEAD",
+                        null,
+                        PageRequest.of(0, 10)
+                );
+
+        // Assert
+        assertEquals(1, result.getTotalElements());
+        assertEquals(deadId, result.getContent().get(0).id());
+        assertEquals("DEAD", result.getContent().get(0).status());
+    }
+
+    @Test
+    void shouldReturnDeadDeliveryWithAttemptHistory() {
+        // Arrange
+        UUID deliveryId = createDelivery("DEAD");
+
+        jdbcTemplate.update("""
+        INSERT INTO delivery_attempts
+            (delivery_id, attempt_no, status_code,
+             error, duration_ms, attempted_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+                deliveryId,
+                1,
+                500,
+                "Internal Server Error",
+                120L,
+                Timestamp.from(Instant.now().minusSeconds(10))
+        );
+
+        jdbcTemplate.update("""
+        INSERT INTO delivery_attempts
+            (delivery_id, attempt_no, status_code,
+             error, duration_ms, attempted_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+                deliveryId,
+                2,
+                500,
+                "Internal Server Error",
+                95L,
+                Timestamp.from(Instant.now())
+        );
+
+        // Act
+        DeliveryDetailResponse result =
+                deliveryQueryService.getDeliveryById(deliveryId);
+
+        // Assert
+        assertEquals("DEAD", result.delivery().status());
+        assertEquals(deliveryId, result.delivery().id());
+
+        assertEquals(2, result.attempts().size());
+
+        assertEquals(1, result.attempts().get(0).attemptNo());
+        assertEquals(500, result.attempts().get(0).statusCode());
+
+        assertEquals(2, result.attempts().get(1).attemptNo());
+        assertEquals(500, result.attempts().get(1).statusCode());
+
+        assertEquals(
+                "Internal Server Error",
+                result.attempts().get(1).error()
+        );
+    }
+    
 }
