@@ -11,3 +11,8 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
+  app:
+    retry:
+      base-delay: 1s
+      max-delay: 30s
+      max-attempts: 5
