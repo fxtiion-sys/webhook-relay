@@ -61,4 +61,9 @@ public class RetryPolicy {
 
         return Duration.ofMillis(jitterMillis);
     }
+
+    public int maxAttempts() {
+        return maxAttempts;
+    }
+
 }

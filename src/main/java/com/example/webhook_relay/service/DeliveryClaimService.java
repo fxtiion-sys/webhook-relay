@@ -10,17 +10,25 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import com.example.webhook_relay.retry.RetryPolicy;
+
 @Service
 public class DeliveryClaimService {
 
     private final JdbcTemplate jdbcTemplate;
+    private final RetryPolicy retryPolicy;
 
     private static final int BATCH_SIZE = 10;
+
     private static final Duration LEASE_DURATION =
             Duration.ofSeconds(30);
 
-    public DeliveryClaimService(JdbcTemplate jdbcTemplate) {
+    public DeliveryClaimService(
+            JdbcTemplate jdbcTemplate,
+            RetryPolicy retryPolicy
+    ) {
         this.jdbcTemplate = jdbcTemplate;
+        this.retryPolicy = retryPolicy;
     }
 
     public record ClaimedDelivery(
@@ -38,15 +46,17 @@ public class DeliveryClaimService {
             WITH candidates AS (
                 SELECT id
                 FROM deliveries
-                WHERE
+                WHERE (
                     (status = 'PENDING'
                      AND next_attempt_at <= now())
                     OR
                     (status = 'IN_PROGRESS'
                      AND locked_until < now())
-                ORDER BY next_attempt_at, id
-                LIMIT ?
-                FOR UPDATE SKIP LOCKED
+                    )
+                    AND attempt_count < ?
+                    ORDER BY next_attempt_at, id
+                    LIMIT ?
+                    FOR UPDATE SKIP LOCKED
             ),
             claimed AS (
                 UPDATE deliveries d
@@ -82,6 +92,7 @@ public class DeliveryClaimService {
                         rs.getTimestamp("locked_until")
                                 .toInstant()
                 ),
+                retryPolicy.maxAttempts(),
                 BATCH_SIZE,
                 java.sql.Timestamp.from(leaseUntil)
         );
