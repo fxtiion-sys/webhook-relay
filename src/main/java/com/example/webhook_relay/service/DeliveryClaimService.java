@@ -53,7 +53,7 @@ public class DeliveryClaimService {
             )
         WHERE status = 'IN_PROGRESS'
           AND locked_until < now()
-          AND attempt_count >= ?
+          AND (attempt_count - attempt_base) >= ?
         """;
 
         return jdbcTemplate.update(
@@ -76,7 +76,7 @@ public class DeliveryClaimService {
                     (status = 'IN_PROGRESS'
                      AND locked_until < now())
                     )
-                    AND attempt_count < ?
+                    AND (attempt_count - attempt_base) < ?
                     ORDER BY next_attempt_at, id
                     LIMIT ?
                     FOR UPDATE SKIP LOCKED

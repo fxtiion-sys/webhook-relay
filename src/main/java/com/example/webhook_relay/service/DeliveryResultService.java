@@ -41,6 +41,22 @@ public class DeliveryResultService {
     ) {
         Integer statusCode = result.statusCode();
 
+        Integer attemptBase = jdbcTemplate.queryForObject(
+                """
+                SELECT attempt_base
+                FROM deliveries
+                WHERE id = ?
+                """,
+                Integer.class,
+                deliveryId
+        );
+
+        if (attemptBase == null) {
+            throw new IllegalStateException("Delivery not found: " + deliveryId);
+        }
+
+        int cycleAttemptNo = attemptNo - attemptBase;
+
         DeliveryOutcome outcome = failureClassifier.classify(result);
 
         String newStatus;
@@ -49,7 +65,7 @@ public class DeliveryResultService {
         if (outcome == DeliveryOutcome.SUCCESS) {
             newStatus = "SUCCEEDED";
         } else if (outcome == DeliveryOutcome.PERMANENT_FAILURE
-                || attemptNo >= retryPolicy.maxAttempts()) {
+                || cycleAttemptNo >= retryPolicy.maxAttempts()) {
             newStatus = "DEAD";
         } else {
             newStatus = "PENDING";
@@ -72,6 +88,7 @@ public class DeliveryResultService {
               AND status = 'IN_PROGRESS'
               AND attempt_count = ?
               AND locked_until = ?
+              AND attempt_base = ?
             """;
 
         Long retryDelayMillis = retryDelay == null
@@ -87,7 +104,8 @@ public class DeliveryResultService {
                 retryDelayMillis,
                 deliveryId,
                 attemptNo,
-                Timestamp.from(lockedUntil)
+                Timestamp.from(lockedUntil),
+                attemptBase
         );
 
         if (updated == 0) {
