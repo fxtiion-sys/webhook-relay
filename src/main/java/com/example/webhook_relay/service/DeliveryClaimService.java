@@ -40,6 +40,29 @@ public class DeliveryClaimService {
     ) {}
 
     @Transactional
+    public int cleanupExpiredDeliveries() {
+
+        String sql = """
+        UPDATE deliveries
+        SET status = 'DEAD',
+            locked_until = NULL,
+            updated_at = now(),
+            last_error = COALESCE(
+                last_error,
+                'Maximum attempts reached; lease expired'
+            )
+        WHERE status = 'IN_PROGRESS'
+          AND locked_until < now()
+          AND attempt_count >= ?
+        """;
+
+        return jdbcTemplate.update(
+                sql,
+                retryPolicy.maxAttempts()
+        );
+    }
+
+    @Transactional
     public List<ClaimedDelivery> claimDeliveries() {
 
         String sql = """

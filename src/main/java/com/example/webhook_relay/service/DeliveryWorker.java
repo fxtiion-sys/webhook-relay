@@ -5,6 +5,7 @@ import com.example.webhook_relay.dto.DeliveryResult;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.sql.SQLOutput;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
@@ -31,6 +32,14 @@ public class DeliveryWorker {
 
     @Scheduled(fixedDelay = 500)
     public void processDeliveries() {
+
+        int cleaned = claimService.cleanupExpiredDeliveries();
+
+        if (cleaned > 0) {
+            System.out.println(
+                    "Expired deliveries marked DEAD: " + cleaned
+            );
+        }
 
         var deliveries = claimService.claimDeliveries();
 

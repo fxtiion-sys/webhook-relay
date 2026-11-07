@@ -277,4 +277,231 @@ class DeliveryWorkerIntegrationTest extends PostgresIntegrationTest {
 
         assertEquals(2, savedAttemptNo);
     }
+
+    @Test
+    void http400ShouldBeMarkedDeadImmediately() {
+        // Arrange
+        UUID deliveryId = createDelivery();
+
+        ClaimedDelivery claimed = claimService.claimDeliveries()
+                .stream()
+                .filter(d -> d.id().equals(deliveryId))
+                .findFirst()
+                .orElseThrow();
+
+        DeliveryResult failure = new DeliveryResult(
+                400,
+                "Bad Request",
+                25L
+        );
+
+        // Act
+        boolean saved = resultService.saveResult(
+                deliveryId,
+                claimed.attemptNo(),
+                claimed.lockedUntil(),
+                failure
+        );
+
+        // Assert
+        assertTrue(saved);
+
+        String status = jdbcTemplate.queryForObject(
+                "SELECT status FROM deliveries WHERE id = ?",
+                String.class,
+                deliveryId
+        );
+
+        assertEquals("DEAD", status);
+
+        Integer attemptCount = jdbcTemplate.queryForObject(
+                "SELECT attempt_count FROM deliveries WHERE id = ?",
+                Integer.class,
+                deliveryId
+        );
+
+        assertEquals(1, attemptCount);
+    }
+
+    @Test
+    void http500ShouldScheduleRetry() {
+        // Arrange
+        UUID deliveryId = createDelivery();
+
+        ClaimedDelivery claimed = claimService.claimDeliveries()
+                .stream()
+                .filter(d -> d.id().equals(deliveryId))
+                .findFirst()
+                .orElseThrow();
+
+        DeliveryResult failure = new DeliveryResult(
+                500,
+                "Internal Server Error",
+                25L
+        );
+
+        Instant beforeSave = Instant.now();
+
+        // Act
+        boolean saved = resultService.saveResult(
+                deliveryId,
+                claimed.attemptNo(),
+                claimed.lockedUntil(),
+                failure
+        );
+
+        Instant afterSave = Instant.now();
+
+        // Assert
+        assertTrue(saved);
+
+        String status = jdbcTemplate.queryForObject(
+                "SELECT status FROM deliveries WHERE id = ?",
+                String.class,
+                deliveryId
+        );
+
+        assertEquals("PENDING", status);
+
+        Instant nextAttemptAt = jdbcTemplate.queryForObject(
+                "SELECT next_attempt_at FROM deliveries WHERE id = ?",
+                Timestamp.class,
+                deliveryId
+        ).toInstant();
+
+        // First retry: full jitter between 0 and 1 second.
+        assertFalse(nextAttemptAt.isBefore(beforeSave));
+        assertFalse(nextAttemptAt.isAfter(afterSave.plusSeconds(1)));
+
+        Integer attemptCount = jdbcTemplate.queryForObject(
+                "SELECT attempt_count FROM deliveries WHERE id = ?",
+                Integer.class,
+                deliveryId
+        );
+
+        assertEquals(1, attemptCount);
+    }
+
+    @Test
+    void http500AtMaxAttemptsShouldBeDead() {
+        // Arrange
+        UUID deliveryId = createDelivery();
+
+        // Simulate four previous attempts.
+        jdbcTemplate.update("""
+        UPDATE deliveries
+        SET attempt_count = 4
+        WHERE id = ?
+        """, deliveryId);
+
+        // Claiming increments attempt_count to 5.
+        ClaimedDelivery claimed = claimService.claimDeliveries()
+                .stream()
+                .filter(d -> d.id().equals(deliveryId))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(5, claimed.attemptNo());
+
+        DeliveryResult failure = new DeliveryResult(
+                500,
+                "Internal Server Error",
+                25L
+        );
+
+        // Act
+        boolean saved = resultService.saveResult(
+                deliveryId,
+                claimed.attemptNo(),
+                claimed.lockedUntil(),
+                failure
+        );
+
+        // Assert
+        assertTrue(saved);
+
+        String status = jdbcTemplate.queryForObject(
+                "SELECT status FROM deliveries WHERE id = ?",
+                String.class,
+                deliveryId
+        );
+
+        assertEquals("DEAD", status);
+
+        Integer attemptCount = jdbcTemplate.queryForObject(
+                "SELECT attempt_count FROM deliveries WHERE id = ?",
+                Integer.class,
+                deliveryId
+        );
+
+        assertEquals(5, attemptCount);
+
+        // A terminal delivery must not be claimed again.
+        boolean claimedAgain = claimService.claimDeliveries()
+                .stream()
+                .anyMatch(d -> d.id().equals(deliveryId));
+
+        assertFalse(claimedAgain);
+    }
+
+    @Test
+    void expiredLeaseAtMaxAttemptsShouldBeDead() {
+        // Arrange
+        UUID deliveryId = createDelivery();
+
+        // Simulate four previous attempts.
+        jdbcTemplate.update("""
+        UPDATE deliveries
+        SET attempt_count = 4
+        WHERE id = ?
+        """, deliveryId);
+
+        ClaimedDelivery claimed = claimService.claimDeliveries()
+                .stream()
+                .filter(d -> d.id().equals(deliveryId))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(5, claimed.attemptNo());
+
+        // Simulate a worker crash and lease expiration.
+        jdbcTemplate.update("""
+        UPDATE deliveries
+        SET locked_until = ?
+        WHERE id = ?
+        """,
+                Timestamp.from(Instant.now().minusSeconds(60)),
+                deliveryId
+        );
+
+        // Act
+        int cleaned = claimService.cleanupExpiredDeliveries();
+
+        // Assert
+        assertEquals(1, cleaned);
+
+        String status = jdbcTemplate.queryForObject(
+                "SELECT status FROM deliveries WHERE id = ?",
+                String.class,
+                deliveryId
+        );
+
+        assertEquals("DEAD", status);
+
+        Timestamp lockedUntil = jdbcTemplate.queryForObject(
+                "SELECT locked_until FROM deliveries WHERE id = ?",
+                Timestamp.class,
+                deliveryId
+        );
+
+        assertNull(lockedUntil);
+
+        // The delivery must not be reclaimed.
+        boolean claimedAgain = claimService.claimDeliveries()
+                .stream()
+                .anyMatch(d -> d.id().equals(deliveryId));
+
+        assertFalse(claimedAgain);
+    }
+    
 }
