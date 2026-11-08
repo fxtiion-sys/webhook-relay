@@ -9,6 +9,9 @@ import java.sql.SQLOutput;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
+import com.example.webhook_relay.security.WebhookSigner;
+import java.time.Instant;
+
 @Service
 @ConditionalOnProperty(
         name = "app.worker.enabled",
@@ -19,6 +22,7 @@ public class DeliveryWorker {
     private final DeliveryClaimService claimService;
     private final DeliverySender deliverySender;
     private final DeliveryResultService resultService;
+    private final WebhookSigner webhookSigner = new WebhookSigner();
 
     public DeliveryWorker(
             DeliveryClaimService claimService,
@@ -46,10 +50,25 @@ public class DeliveryWorker {
         for (var delivery : deliveries) {
 
             try {
+                long timestamp = Instant.now().getEpochSecond();
+
+                String signature = webhookSigner.sign(
+                        delivery.secret(),
+                        timestamp,
+                        delivery.body()
+                );
+
+                Map<String, String> headers = Map.of(
+                        "Content-Type", "application/json",
+                        "Webhook-Id", delivery.id().toString(),
+                        "Webhook-Timestamp", String.valueOf(timestamp),
+                        "Webhook-Signature", "t=" + timestamp + ",v1=" + signature
+                );
+
                 DeliveryResult result = deliverySender.send(
                         delivery.url(),
                         delivery.body(),
-                        Map.of("Content-Type", "application/json")
+                        headers
                 );
 
                 boolean saved = resultService.saveResult(
