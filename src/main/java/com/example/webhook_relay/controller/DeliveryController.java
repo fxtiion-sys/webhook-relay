@@ -14,14 +14,20 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
 
+import com.example.webhook_relay.service.DeliveryReplayService;
+
 @RestController
 @RequestMapping("/deliveries")
 public class DeliveryController {
 
     private final DeliveryQueryService deliveryQueryService;
+    private final DeliveryReplayService deliveryReplayService;
 
-    public DeliveryController(DeliveryQueryService deliveryQueryService) {
+    public DeliveryController(
+            DeliveryQueryService deliveryQueryService,
+            DeliveryReplayService deliveryReplayService) {
         this.deliveryQueryService = deliveryQueryService;
+        this.deliveryReplayService = deliveryReplayService;
     }
 
     @GetMapping
@@ -58,4 +64,9 @@ public class DeliveryController {
         return ResponseEntity.ok(delivery);
     }
 
+    @PostMapping("/{id}/replay")
+    public ResponseEntity<Void> replayDelivery(@PathVariable UUID id) {
+        deliveryReplayService.replay(id);
+        return ResponseEntity.accepted().build();
+    }
 }

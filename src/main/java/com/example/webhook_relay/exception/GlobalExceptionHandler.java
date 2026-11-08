@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.util.List;
 import java.util.NoSuchElementException;
 
+
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -82,5 +83,13 @@ public class GlobalExceptionHandler {
                 ));
     }
 
+    @ExceptionHandler(DeliveryReplayConflictException.class)
+    public ResponseEntity<String> handleDeliveryReplayConflict(
+            DeliveryReplayConflictException ex
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(ex.getMessage());
+    }
 
 }
