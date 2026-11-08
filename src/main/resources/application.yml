@@ -16,3 +16,6 @@ app:
     base-delay: 1s
     max-delay: 30s
     max-attempts: 5
+
+  mock-receiver:
+    secret: ${MOCK_RECEIVER_SECRET:local-test-secret}

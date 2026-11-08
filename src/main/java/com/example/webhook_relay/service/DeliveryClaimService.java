@@ -35,6 +35,7 @@ public class DeliveryClaimService {
             UUID id,
             String url,
             String body,
+            String secret,
             int attemptNo,
             Instant lockedUntil
     ) {}
@@ -94,6 +95,7 @@ public class DeliveryClaimService {
             )
             SELECT c.id,
                    ep.url,
+                   ep.secret,
                    ev.payload::text AS body,
                    c.attempt_count,
                    c.locked_until
@@ -111,6 +113,7 @@ public class DeliveryClaimService {
                         rs.getObject("id", UUID.class),
                         rs.getString("url"),
                         rs.getString("body"),
+                        rs.getString("secret"),
                         rs.getInt("attempt_count"),
                         rs.getTimestamp("locked_until")
                                 .toInstant()
