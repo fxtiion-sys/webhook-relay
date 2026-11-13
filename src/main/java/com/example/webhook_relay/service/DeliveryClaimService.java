@@ -33,9 +33,11 @@ public class DeliveryClaimService {
 
     public record ClaimedDelivery(
             UUID id,
+            UUID endpointId,
             String url,
             String body,
             String secret,
+            Integer rateLimitPerSec,
             int attemptNo,
             Instant lockedUntil
     ) {}
@@ -94,8 +96,10 @@ public class DeliveryClaimService {
                           d.event_id, d.attempt_count, d.locked_until
             )
             SELECT c.id,
+                   c.endpoint_id,
                    ep.url,
                    ep.secret,
+                   ep.rate_limit_per_sec,
                    ev.payload::text AS body,
                    c.attempt_count,
                    c.locked_until
@@ -111,12 +115,13 @@ public class DeliveryClaimService {
                 sql,
                 (rs, rowNum) -> new ClaimedDelivery(
                         rs.getObject("id", UUID.class),
+                        rs.getObject("endpoint_id", UUID.class),
                         rs.getString("url"),
                         rs.getString("body"),
                         rs.getString("secret"),
+                        rs.getObject("rate_limit_per_sec", Integer.class),
                         rs.getInt("attempt_count"),
-                        rs.getTimestamp("locked_until")
-                                .toInstant()
+                        rs.getTimestamp("locked_until").toInstant()
                 ),
                 retryPolicy.maxAttempts(),
                 BATCH_SIZE,
