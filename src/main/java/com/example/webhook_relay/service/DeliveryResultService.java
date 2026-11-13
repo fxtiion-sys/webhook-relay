@@ -137,4 +137,41 @@ public class DeliveryResultService {
 
         return true;
     }
+
+    @Transactional
+    public boolean deferRateLimitedDelivery(
+            UUID deliveryId,
+            int attemptNo,
+            Instant lockedUntil,
+            Duration delay
+    ) {
+        if (delay == null || delay.isNegative() || delay.isZero()) {
+            throw new IllegalArgumentException("Delay must be positive");
+        }
+
+        String sql = """
+        UPDATE deliveries
+        SET status = 'PENDING',
+            attempt_count = attempt_count - 1,
+            locked_until = NULL,
+            next_attempt_at = now() + (? * interval '1 millisecond'),
+            updated_at = now()
+        WHERE id = ?
+          AND status = 'IN_PROGRESS'
+          AND attempt_count = ?
+          AND locked_until = ?
+          AND attempt_count > attempt_base
+        """;
+
+        int updated = jdbcTemplate.update(
+                sql,
+                delay.toMillis(),
+                deliveryId,
+                attemptNo,
+                Timestamp.from(lockedUntil)
+        );
+
+        return updated == 1;
+    }
+
 }
