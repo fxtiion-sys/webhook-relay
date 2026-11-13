@@ -38,6 +38,9 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
 	testImplementation 'org.testcontainers:testcontainers-postgresql'
 	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+	// Testing - HTTP Simulation & Async Assertions
+	testImplementation 'org.wiremock:wiremock-standalone:3.13.2'
+	testImplementation 'org.awaitility:awaitility:4.3.0'
 	// Testing - JUnit
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
