@@ -4,13 +4,14 @@ package com.example.webhook_relay.service;
 import com.example.webhook_relay.dto.DeliveryResult;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-
-import java.sql.SQLOutput;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import com.example.webhook_relay.security.WebhookSigner;
 import java.time.Instant;
+
+import com.example.webhook_relay.ratelimit.TokenBucketRateLimiter;
+import java.time.Duration;
 
 @Service
 @ConditionalOnProperty(
@@ -23,15 +24,18 @@ public class DeliveryWorker {
     private final DeliverySender deliverySender;
     private final DeliveryResultService resultService;
     private final WebhookSigner webhookSigner = new WebhookSigner();
+    private final TokenBucketRateLimiter rateLimiter;
 
     public DeliveryWorker(
             DeliveryClaimService claimService,
             DeliverySender deliverySender,
-            DeliveryResultService resultService
+            DeliveryResultService resultService,
+            TokenBucketRateLimiter rateLimiter
     ) {
         this.claimService = claimService;
         this.deliverySender = deliverySender;
         this.resultService = resultService;
+        this.rateLimiter = rateLimiter;
     }
 
     @Scheduled(fixedDelay = 500)
@@ -48,8 +52,30 @@ public class DeliveryWorker {
         var deliveries = claimService.claimDeliveries();
 
         for (var delivery : deliveries) {
-
             try {
+                boolean allowed = rateLimiter.tryAcquire(
+                        delivery.endpointId(),
+                        delivery.rateLimitPerSec()
+                );
+
+                if (!allowed) {
+                    boolean deferred = resultService.deferRateLimitedDelivery(
+                            delivery.id(),
+                            delivery.attemptNo(),
+                            delivery.lockedUntil(),
+                            Duration.ofMillis(500)
+                    );
+
+                    if (!deferred) {
+                        System.out.println(
+                                "Stale rate-limited delivery ignored: "
+                                        + delivery.id()
+                        );
+                    }
+
+                    continue;
+                }
+
                 long timestamp = Instant.now().getEpochSecond();
 
                 String signature = webhookSigner.sign(
