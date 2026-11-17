@@ -19,3 +19,9 @@ app:
 
   mock-receiver:
     secret: ${MOCK_RECEIVER_SECRET:local-test-secret}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
