@@ -9,29 +9,21 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 ## What's implemented
 
 - **Application:** Spring Boot 4.1.1 with REST APIs, Bean Validation, Actuator, and separate `local` and `test` profiles.
-
 - **Database:** PostgreSQL 17 managed through Docker Compose, with Flyway migrations and Spring Data JPA.
-
 - **Endpoint registration:** Register HTTP endpoints and subscribe them to event types.
-
 - **Event ingestion:** Accept events and create delivery jobs for subscribed endpoints within a database transaction.
-
 - **Delivery worker:** Poll for eligible deliveries, claim jobs using `FOR UPDATE SKIP LOCKED`, and send HTTP POST requests.
-
 - **Retry and recovery:** Retry transient failures using capped exponential backoff with full jitter, reclaim expired leases, and reject stale worker results.
 - **Failure classification:** Distinguish retryable HTTP/server/transport failures from terminal errors; move exhausted or non-retryable deliveries to `DEAD`.
 - **Replay:** Manually replay dead-letter deliveries through `POST /deliveries/{id}/replay` with replay-specific attempt accounting.
 - **Event idempotency:** Accept an idempotency key to prevent duplicate event creation and detect conflicting reuse.
 - **Webhook authentication:** Sign outgoing requests with HMAC-SHA256 and verify signatures with a timestamp freshness window and constant-time comparison.
 - **Rate limiting:** Apply per-endpoint token-bucket limits and defer deliveries when capacity is exhausted without issuing an HTTP request.
-
 - **Delivery history API:** List deliveries with status filtering, endpoint filtering, and pagination; retrieve individual deliveries with their attempt history.
-
 - **Testing:** JUnit 5, Testcontainers, WireMock Standalone, and Awaitility tests covering database integrity, concurrency, retries, HTTP timeouts, terminal failures, signing, and rate limiting.
-
 - **Local demo:** `scripts/demo.sh` demonstrates endpoint registration, event publishing, worker processing, and delivery history retrieval.
-
 - **Development workflow:** Gradle Wrapper, GitHub Actions, pull requests, branch protection, and Dependabot.
+- **Observability:** Actuator health and Prometheus endpoints, committed delivery outcome counters, HTTP and end-to-end latency histograms, and a periodically refreshed pending-delivery gauge.
 
 ## Current limitations
 
@@ -39,9 +31,9 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 
 - Load testing and production performance benchmarks have not been completed.
 
-- Additional features, including manual replay, configurable exponential backoff, and delivery metrics, remain on the roadmap.
+- Prometheus scraping infrastructure and Grafana dashboards are not yet configured.
 
-- Request signing is not yet documented as a verified end-to-end feature.
+- Additional receiver-outage and worker-crash scenarios remain planned.
 
 ## Technology
 
@@ -63,13 +55,13 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 
 | Local infrastructure | Docker Compose |
 
-| Health endpoint | Spring Boot Actuator |
+| Observability | Spring Boot Actuator, Micrometer, Prometheus metrics endpoint |
 
 | Testing | JUnit 5, Spring Boot Test, Testcontainers (PostgreSQL 17), WireMock Standalone, Awaitility |
 
 | CI | GitHub Actions |
 
-**Planned:** Micrometer/Prometheus delivery metrics, k6 load testing, and a public HTTPS deployment.
+**Planned:** Prometheus scraping and Grafana dashboards, k6 load testing, and a public HTTPS deployment.
 
 ## Delivery architecture
 
@@ -147,7 +139,7 @@ Worker concurrency and expired-lease recovery are covered by integration tests u
 
 | `deliveries` | One event-to-endpoint job: status, attempt count, retry schedule, lease, latest outcome |
 
-| `delivery_attempts` | Per-attempt HTTP status or transport error, duration, start time |
+| `delivery_attempts` | Per-attempt HTTP status or transport error, duration, result-recording time |
 
 One event has many deliveries; one delivery has many attempts.
 
@@ -367,6 +359,7 @@ The JSON shown above is abbreviated. Actual responses also include IDs, timestam
 | POST | `/mock-receiver` | Local receiver for testing HTTP delivery |
 
 | GET | `/actuator/health` | Check application health |
+| GET | `/actuator/prometheus` | Export application and custom delivery metrics |
 
 #### Create an endpoint
 
@@ -385,6 +378,10 @@ curl -X POST http://localhost:8080/endpoints \\
   }'
 
 ```
+
+The local mock receiver validates webhook signatures. To deliver successfully
+to it, configure `app.mock-receiver.secret` to match the secret returned by
+endpoint registration, then restart the application before publishing an event.
 
 #### Publish an event
 
@@ -454,6 +451,33 @@ docker compose stop
 
 The database volume is preserved. Running `docker compose down -v` deletes the database volume and its data.
 
+## Observability
+
+Available at `/actuator/prometheus`:
+
+| Metric | Meaning |
+| --- | --- |
+| `webhook_delivery_attempts_total` | Committed attempt outcomes, labeled by `result`: success, retry, or dead |
+| `webhook_delivery_duration_seconds` | HTTP attempt duration, including failed calls |
+| `webhook_delivery_e2e_latency_seconds` | Time from event creation to successful delivery commit, measured per delivery |
+| `webhook_deliveries_pending` | Current PENDING deliveries, including scheduled retries; refreshed every 5 seconds |
+
+Both timers publish histogram buckets, counts, and sums.
+
+Result counters and E2E measurements are recorded after transaction commit.
+Rolled-back and stale results do not increment them. HTTP timing records
+performed calls even when their results are later rejected as stale.
+
+The pending gauge starts as NaN until its first successful database query.
+A refresh failure retains the previous value. When multiple app instances
+observe the same database, do not sum their pending gauges.
+
+Metrics use bounded labels rather than endpoint IDs, delivery IDs, or URLs.
+Counters reset on application restart and are operational measurements,
+not a durable audit log. Lease-expiry cleanup does not increment the
+attempt-outcome counter. E2E latency includes only successful deliveries;
+a replay retains the original event creation time.
+
 ## Testing
 
 Integration tests run against PostgreSQL 17 using Testcontainers. Docker must be running, but no manually configured test database is required.
@@ -495,21 +519,13 @@ Run delivery query integration tests only:
 The integration test suite covers:
 
 - **Persistence:** JPA entity mappings, JSONB payloads, relationships, and repository operations.
-
 - **Database schema:** Flyway migrations, foreign keys, uniqueness constraints, CHECK constraints, and indexes.
-
 - **Event ingestion:** Event creation and transactional delivery job creation.
-
 - **HTTP delivery:** Sending webhook requests and recording delivery outcomes.
-
 - **Worker concurrency:** Multiple workers claiming jobs without duplicate ownership.
-
 - **Lease recovery:** Reclaiming expired leases and rejecting stale worker results.
-
 - **Delivery queries:** Status filtering, endpoint filtering, and pagination.
-
 - **Delivery details:** Retrieving delivery metadata and attempt history in ascending attempt-number order.
-
 - **Error handling:** Returning a not-found error for nonexistent deliveries.
 - **Retries and terminal failures:** Real HTTP `500 → 500 → 200`, timeout → success, and `400 → DEAD` scenarios with WireMock and Awaitility.
 - **Retry policy:** Capped exponential backoff with full jitter and deterministic unit tests.
@@ -547,33 +563,19 @@ GitHub Actions also runs the Gradle build and integration tests.
 ### Completed
 
 - [x] Spring Boot foundation, CI, and repository workflow
-
 - [x] Local PostgreSQL with Docker Compose
-
 - [x] Database schema, constraints, and indexes with Flyway
-
 - [x] JPA entities and Spring Data repositories
-
 - [x] PostgreSQL integration tests with Testcontainers
-
 - [x] Endpoint registration API
-
 - [x] Event ingestion with transactional delivery job creation
-
 - [x] Asynchronous HTTP webhook delivery
-
 - [x] Concurrent worker claiming with `FOR UPDATE SKIP LOCKED`
-
 - [x] Retry handling for failed deliveries
-
 - [x] Expired lease recovery and stale worker result rejection
-
 - [x] Delivery list API with filtering and pagination
-
 - [x] Delivery detail API with attempt history
-
 - [x] Worker concurrency and delivery query integration tests
-
 - [x] End-to-end demo script
 - [x] Configurable exponential backoff with full jitter
 - [x] Retryable/non-retryable failure classification and dead-letter handling
@@ -582,23 +584,15 @@ GitHub Actions also runs the Gradle build and integration tests.
 - [x] Per-endpoint token-bucket rate limiting
 - [x] WireMock/Awaitility HTTP reliability integration tests
 - [x] v0.2 release
+- [x] Actuator health and Prometheus endpoints
+- [x] Custom delivery metrics with transaction-aware recording
 
 ### Planned
 
-- [ ] Configurable exponential backoff with jitter
-
-- [ ] Manual delivery replay
-
-- [ ] HMAC-SHA256 request signing with timestamps
-
-- [ ] Delivery metrics and monitoring
-
+- [ ] Prometheus scraping and Grafana dashboards
 - [ ] Reproducible load testing with k6
-
 - [ ] Additional receiver-outage and worker-crash tests
-
 - [ ] HTTPS demo deployment
-
 - [ ] Delivery history UI
 
 ### Not included in v0.2

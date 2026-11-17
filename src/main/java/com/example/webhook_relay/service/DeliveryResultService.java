@@ -16,20 +16,27 @@ import com.example.webhook_relay.retry.RetryPolicy;
 
 import java.time.Duration;
 
+import com.example.webhook_relay.metrics.DeliveryMetrics;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
 @Service
 public class DeliveryResultService {
 
     private final JdbcTemplate jdbcTemplate;
     private final RetryPolicy retryPolicy;
     private final FailureClassifier failureClassifier;
+    private final DeliveryMetrics deliveryMetrics;
 
     public DeliveryResultService(
             JdbcTemplate jdbcTemplate,
-            RetryPolicy retryPolicy
+            RetryPolicy retryPolicy,
+            DeliveryMetrics deliveryMetrics
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.retryPolicy = retryPolicy;
         this.failureClassifier = new FailureClassifier();
+        this.deliveryMetrics = deliveryMetrics;
     }
 
     @Transactional
@@ -133,6 +140,55 @@ public class DeliveryResultService {
                 statusCode,
                 result.error(),
                 result.durationMs()
+        );
+
+        DeliveryMetrics.Result metricResult = switch (newStatus) {
+            case "SUCCEEDED" -> DeliveryMetrics.Result.SUCCESS;
+            case "PENDING" -> DeliveryMetrics.Result.RETRY;
+            case "DEAD" -> DeliveryMetrics.Result.DEAD;
+            default -> throw new IllegalStateException(
+                    "Unexpected delivery status: " + newStatus
+            );
+        };
+
+        Instant eventCreatedAt;
+
+        if (metricResult == DeliveryMetrics.Result.SUCCESS) {
+            Timestamp createdAt = jdbcTemplate.queryForObject(
+                    """
+                    SELECT e.created_at
+                    FROM events e
+                    JOIN deliveries d ON d.event_id = e.id
+                    WHERE d.id = ?
+                    """,
+                    Timestamp.class,
+                    deliveryId
+            );
+
+            if (createdAt == null) {
+                throw new IllegalStateException(
+                        "Event creation timestamp missing for delivery: " + deliveryId
+                );
+            }
+
+            eventCreatedAt = createdAt.toInstant();
+        } else {
+            eventCreatedAt = null;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        deliveryMetrics.recordCommittedResult(metricResult);
+
+                        if (eventCreatedAt != null) {
+                            deliveryMetrics.recordE2eLatency(
+                                    Duration.between(eventCreatedAt, Instant.now())
+                            );
+                        }
+                    }
+                }
         );
 
         return true;
