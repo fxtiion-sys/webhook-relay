@@ -20,6 +20,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.stubbing.Scenario.STARTED;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
+import com.example.webhook_relay.metrics.DeliveryMetrics;
 
 class DeliveryRetryHttpIntegrationTest extends PostgresIntegrationTest {
 
@@ -34,6 +35,9 @@ class DeliveryRetryHttpIntegrationTest extends PostgresIntegrationTest {
 
     @Autowired
     private DeliverySender deliverySender;
+
+    @Autowired
+    private DeliveryMetrics deliveryMetrics;
 
     private WireMockServer wireMockServer;
 
@@ -131,7 +135,8 @@ class DeliveryRetryHttpIntegrationTest extends PostgresIntegrationTest {
                 claimService,
                 deliverySender,
                 resultService,
-                new TokenBucketRateLimiter()
+                new TokenBucketRateLimiter(),
+                deliveryMetrics
         );
 
         // Act: Process deliveries until retry succeeds.
@@ -236,7 +241,8 @@ class DeliveryRetryHttpIntegrationTest extends PostgresIntegrationTest {
                 claimService,
                 deliverySender,
                 resultService,
-                new TokenBucketRateLimiter()
+                new TokenBucketRateLimiter(),
+                deliveryMetrics
         );
 
         // Act: Process until the retry succeeds.
@@ -332,7 +338,8 @@ class DeliveryRetryHttpIntegrationTest extends PostgresIntegrationTest {
                 claimService,
                 deliverySender,
                 resultService,
-                new TokenBucketRateLimiter()
+                new TokenBucketRateLimiter(),
+                deliveryMetrics
         );
 
         // Act: Process the delivery once.

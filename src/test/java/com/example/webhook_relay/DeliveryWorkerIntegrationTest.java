@@ -22,6 +22,10 @@ import java.util.concurrent.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
 class DeliveryWorkerIntegrationTest extends PostgresIntegrationTest {
 
     @Autowired
@@ -32,6 +36,12 @@ class DeliveryWorkerIntegrationTest extends PostgresIntegrationTest {
 
     @Autowired
     private DeliveryResultService resultService;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     private final List<UUID> deliveryIds = new ArrayList<>();
     private final List<UUID> eventIds = new ArrayList<>();
@@ -502,6 +512,126 @@ class DeliveryWorkerIntegrationTest extends PostgresIntegrationTest {
                 .anyMatch(d -> d.id().equals(deliveryId));
 
         assertFalse(claimedAgain);
+    }
+
+    private double successMetricCount() {
+        return meterRegistry.get("webhook.delivery.attempts")
+                .tag("result", "success")
+                .counter()
+                .count();
+    }
+
+    private long e2eMetricCount() {
+        return meterRegistry.get("webhook.delivery.e2e.latency")
+                .timer()
+                .count();
+    }
+
+    private ClaimedDelivery claimDelivery(UUID deliveryId) {
+        return claimService.claimDeliveries()
+                .stream()
+                .filter(d -> d.id().equals(deliveryId))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    @Test
+    void successMetricsShouldBeRecordedOnlyAfterCommit() {
+        UUID deliveryId = createDelivery();
+        ClaimedDelivery claimed = claimDelivery(deliveryId);
+
+        double successBefore = successMetricCount();
+        long e2eBefore = e2eMetricCount();
+
+        TransactionTemplate transaction =
+                new TransactionTemplate(transactionManager);
+
+        transaction.executeWithoutResult(status -> {
+            boolean saved = resultService.saveResult(
+                    deliveryId,
+                    claimed.attemptNo(),
+                    claimed.lockedUntil(),
+                    new DeliveryResult(200, null, 25L)
+            );
+
+            assertTrue(saved);
+
+            // The outer transaction has not committed yet.
+            assertEquals(successBefore, successMetricCount());
+            assertEquals(e2eBefore, e2eMetricCount());
+        });
+
+        assertEquals(successBefore + 1, successMetricCount());
+        assertEquals(e2eBefore + 1, e2eMetricCount());
+    }
+
+    @Test
+    void rolledBackResultShouldNotRecordMetricsOrPersistChanges() {
+        UUID deliveryId = createDelivery();
+        ClaimedDelivery claimed = claimDelivery(deliveryId);
+
+        double successBefore = successMetricCount();
+        long e2eBefore = e2eMetricCount();
+
+        TransactionTemplate transaction =
+                new TransactionTemplate(transactionManager);
+
+        transaction.executeWithoutResult(status -> {
+            assertTrue(resultService.saveResult(
+                    deliveryId,
+                    claimed.attemptNo(),
+                    claimed.lockedUntil(),
+                    new DeliveryResult(200, null, 25L)
+            ));
+
+            status.setRollbackOnly();
+        });
+
+        assertEquals(successBefore, successMetricCount());
+        assertEquals(e2eBefore, e2eMetricCount());
+
+        assertEquals(
+                "IN_PROGRESS",
+                jdbcTemplate.queryForObject(
+                        "SELECT status FROM deliveries WHERE id = ?",
+                        String.class,
+                        deliveryId
+                )
+        );
+
+        assertEquals(
+                0,
+                jdbcTemplate.queryForObject(
+                        """
+                        SELECT count(*)
+                        FROM delivery_attempts
+                        WHERE delivery_id = ?
+                        """,
+                        Integer.class,
+                        deliveryId
+                ).intValue()
+        );
+    }
+
+    @Test
+    void staleResultShouldNotRecordMetrics() {
+        UUID deliveryId = createDelivery();
+        ClaimedDelivery claimed = claimDelivery(deliveryId);
+
+        double successBefore = successMetricCount();
+        long e2eBefore = e2eMetricCount();
+
+        // A mismatched attempt number must fail the fencing check.
+        boolean saved = resultService.saveResult(
+                deliveryId,
+                claimed.attemptNo() + 1,
+                claimed.lockedUntil(),
+                new DeliveryResult(200, null, 25L)
+        );
+
+        assertFalse(saved);
+        assertEquals(successBefore, successMetricCount());
+        assertEquals(e2eBefore, e2eMetricCount());
     }
     
 }
