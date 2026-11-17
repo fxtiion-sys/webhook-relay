@@ -17,11 +17,11 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 - **Failure classification:** Distinguish retryable HTTP/server/transport failures from terminal errors; move exhausted or non-retryable deliveries to `DEAD`.
 - **Replay:** Manually replay dead-letter deliveries through `POST /deliveries/{id}/replay` with replay-specific attempt accounting.
 - **Event idempotency:** Accept an idempotency key to prevent duplicate event creation and detect conflicting reuse.
-- **Webhook authentication:** Sign outgoing requests with HMAC-SHA256 and verify signatures with a timestamp freshness window and constant-time comparison.
+- **Webhook authentication:** Sign outgoing requests with HMAC-SHA256 and verify signatures with a timestamp freshness window and constant-time comparison. The local demo receiver selects the correct endpoint secret using the delivery ID.
 - **Rate limiting:** Apply per-endpoint token-bucket limits and defer deliveries when capacity is exhausted without issuing an HTTP request.
 - **Delivery history API:** List deliveries with status filtering, endpoint filtering, and pagination; retrieve individual deliveries with their attempt history.
 - **Testing:** JUnit 5, Testcontainers, WireMock Standalone, and Awaitility tests covering database integrity, concurrency, retries, HTTP timeouts, terminal failures, signing, and rate limiting.
-- **Local demo:** `scripts/demo.sh` demonstrates endpoint registration, event publishing, worker processing, and delivery history retrieval.
+- **Local demo:** `scripts/demo.sh` demonstrates endpoint registration, event publishing, worker processing, and delivery history retrieval; the local mock receiver resolves endpoint-specific HMAC secrets by delivery ID.
 - **Development workflow:** Gradle Wrapper, GitHub Actions, pull requests, branch protection, and Dependabot.
 - **Observability:** Actuator health and Prometheus endpoints, committed delivery outcome counters, HTTP and end-to-end latency histograms, and a periodically refreshed pending-delivery gauge.
 
@@ -266,9 +266,9 @@ The demo script creates an endpoint, publishes an event, waits for the delivery 
 
 **Prerequisites:** The application and PostgreSQL must be running. Install `curl` and `jq` before running the demo.
 
-**Known limitation:** The current demo script may fail with `401 Invalid webhook signature`. Endpoint registration generates a unique signing secret, while the built-in mock receiver validates requests using a separately configured secret. The two secrets must match for the demo to succeed.
+**Local HMAC verification:** In the `local` profile, the built-in mock receiver uses the incoming `Webhook-Id` (the delivery UUID) to look up that delivery and resolve its endpoint-specific signing secret. This allows endpoints created by the registration API to work with the demo without manually synchronizing secrets. Valid signatures are accepted; invalid signatures and unknown delivery IDs return HTTP `401`. This database-backed secret lookup is enabled only in the `local` profile; outside that profile, the receiver uses the configured `app.mock-receiver.secret`.
 
-This is a local demo configuration issue, not a failure of the HMAC signing implementation. A separate issue tracks the fix. Until then, the script is not a reliable successful-delivery demonstration.
+The end-to-end demo has been verified to complete with a `SUCCEEDED` delivery, one attempt, and HTTP `200`. This receiver is a development/testing aid, not a production webhook receiver.
 
 ```bash
 
@@ -288,7 +288,7 @@ The script performs the following steps:
 
 4\. Retrieves the delivery status and attempt history.
 
-The following output illustrates the intended successful flow once the signing-secret mismatch is resolved.
+The following output illustrates the successful local demo flow.
 
 Expected output:
 
@@ -384,9 +384,7 @@ curl -X POST http://localhost:8080/endpoints \\
 
 ```
 
-The local mock receiver validates webhook signatures. To deliver successfully
-to it, configure `app.mock-receiver.secret` to match the secret returned by
-endpoint registration, then restart the application before publishing an event.
+With the `local` profile active, the mock receiver resolves the signing secret from the delivery ID and its associated endpoint. No manual secret synchronization or application restart is needed after endpoint registration. In other profiles, the receiver uses the configured `app.mock-receiver.secret` instead.
 
 #### Publish an event
 
@@ -519,7 +517,7 @@ The p95 query estimates HTTP attempt latency from histogram buckets; it does not
 - **Target DOWN:** Confirm the application is running on port 8080 and that `/actuator/prometheus` responds. `host.docker.internal` lets the Docker Desktop container reach the host application.
 - **No recent query results:** Check the selected time range and whether requests occurred within the PromQL lookback window.
 - **No E2E latency observations:** This metric records successful deliveries only.
-- **HTTP 401 from the demo receiver:** The endpoint registration API generates a random signing secret, while the local mock receiver expects its configured `MOCK_RECEIVER_SECRET`. The existing demo can fail signature verification until these secrets are aligned. Do not disable signature verification as a production workaround.
+- **HTTP 401 from the demo receiver:** Confirm the application is running with the `local` profile and the request has a valid delivery UUID in `Webhook-Id`, a current `Webhook-Timestamp`, and an HMAC signature generated using that delivery endpoint’s secret. Unknown delivery IDs, missing headers, invalid signatures, and expired timestamps are rejected. Do not disable signature verification as a workaround.
 
 ## Testing
 
@@ -549,6 +547,12 @@ Run HTTP reliability integration tests only:
 ./gradlew test --tests '*DeliveryRetryHttpIntegrationTest'
 ```
 
+Run the local demo secret-resolution and HTTP integration tests:
+
+```bash
+./gradlew test --tests "*LocalDemoSecretResolverIntegrationTest" --tests "*LocalMockReceiverHttpIntegrationTest"
+```
+
 Run delivery query integration tests only:
 
 ```bash
@@ -574,6 +578,7 @@ The integration test suite covers:
 - **Retry policy:** Capped exponential backoff with full jitter and deterministic unit tests.
 - **Idempotency and replay:** Duplicate event protection, conflict handling, and dead-letter replay state transitions.
 - **Signing:** HMAC-SHA256 signature generation and verification against transmitted request bytes.
+- **Local demo HMAC resolution:** PostgreSQL-backed delivery-to-endpoint secret lookup, unknown/malformed delivery IDs, and HTTP `200`/`401` behavior using Spring MVC integration tests.
 - **Rate limiting:** Per-endpoint token-bucket behavior and HTTP-level delivery deferral.
 
 The `DeliveryQueryIntegrationTest` class includes seven tests covering delivery queries, pagination, attempt history, and missing delivery handling.
@@ -631,6 +636,7 @@ GitHub Actions also runs the Gradle build and integration tests.
 - [x] Custom delivery metrics with transaction-aware recording
 - [x] Local Prometheus scraping with Docker Compose
 - [x] PromQL verification for delivery outcomes and latency histograms
+- [x] Local demo HMAC secret mismatch fix and regression tests
 
 ### Planned
 
