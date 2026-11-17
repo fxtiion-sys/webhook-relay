@@ -13,6 +13,8 @@ import java.time.Instant;
 import com.example.webhook_relay.ratelimit.TokenBucketRateLimiter;
 import java.time.Duration;
 
+import com.example.webhook_relay.metrics.DeliveryMetrics;
+
 @Service
 @ConditionalOnProperty(
         name = "app.worker.enabled",
@@ -25,17 +27,20 @@ public class DeliveryWorker {
     private final DeliveryResultService resultService;
     private final WebhookSigner webhookSigner = new WebhookSigner();
     private final TokenBucketRateLimiter rateLimiter;
+    private final DeliveryMetrics deliveryMetrics;
 
     public DeliveryWorker(
             DeliveryClaimService claimService,
             DeliverySender deliverySender,
             DeliveryResultService resultService,
-            TokenBucketRateLimiter rateLimiter
+            TokenBucketRateLimiter rateLimiter,
+            DeliveryMetrics deliveryMetrics
     ) {
         this.claimService = claimService;
         this.deliverySender = deliverySender;
         this.resultService = resultService;
         this.rateLimiter = rateLimiter;
+        this.deliveryMetrics = deliveryMetrics;
     }
 
     @Scheduled(fixedDelay = 500)
@@ -96,6 +101,8 @@ public class DeliveryWorker {
                         delivery.body(),
                         headers
                 );
+
+                deliveryMetrics.recordHttpDuration(result.durationMs());
 
                 boolean saved = resultService.saveResult(
                         delivery.id(),

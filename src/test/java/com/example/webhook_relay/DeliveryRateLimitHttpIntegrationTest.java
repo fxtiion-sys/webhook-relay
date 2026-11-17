@@ -21,6 +21,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.*;
+import com.example.webhook_relay.metrics.DeliveryMetrics;
 
 class DeliveryRateLimitHttpIntegrationTest extends PostgresIntegrationTest {
 
@@ -35,6 +36,9 @@ class DeliveryRateLimitHttpIntegrationTest extends PostgresIntegrationTest {
 
     @Autowired
     private DeliverySender deliverySender;
+
+    @Autowired
+    private DeliveryMetrics deliveryMetrics;
 
     private HttpServer server;
 
@@ -143,7 +147,8 @@ class DeliveryRateLimitHttpIntegrationTest extends PostgresIntegrationTest {
                 claimService,
                 deliverySender,
                 resultService,
-                new TokenBucketRateLimiter()
+                new TokenBucketRateLimiter(),
+                deliveryMetrics
         );
 
         long deadline = System.nanoTime()
