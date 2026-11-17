@@ -31,7 +31,7 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 
 - Load testing and production performance benchmarks have not been completed.
 
-- Prometheus scraping infrastructure and Grafana dashboards are not yet configured.
+- Grafana dashboards and alerting rules are not yet configured.
 
 - Additional receiver-outage and worker-crash scenarios remain planned.
 
@@ -55,14 +55,13 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 
 | Local infrastructure | Docker Compose |
 
-| Observability | Spring Boot Actuator, Micrometer, Prometheus metrics endpoint |
+| Observability | Spring Boot Actuator, Micrometer, Prometheus exporter, Prometheus server (Docker Compose) |
 
 | Testing | JUnit 5, Spring Boot Test, Testcontainers (PostgreSQL 17), WireMock Standalone, Awaitility |
 
 | CI | GitHub Actions |
 
-**Planned:** Prometheus scraping and Grafana dashboards, k6 load testing, and a public HTTPS deployment.
-
+**Planned:** Grafana dashboards, alerting rules, k6 load testing, and a public HTTPS deployment.
 ## Delivery architecture
 
 ```mermaid
@@ -267,6 +266,10 @@ The demo script creates an endpoint, publishes an event, waits for the delivery 
 
 **Prerequisites:** The application and PostgreSQL must be running. Install `curl` and `jq` before running the demo.
 
+**Known limitation:** The current demo script may fail with `401 Invalid webhook signature`. Endpoint registration generates a unique signing secret, while the built-in mock receiver validates requests using a separately configured secret. The two secrets must match for the demo to succeed.
+
+This is a local demo configuration issue, not a failure of the HMAC signing implementation. A separate issue tracks the fix. Until then, the script is not a reliable successful-delivery demonstration.
+
 ```bash
 
 chmod +x scripts/demo.sh
@@ -284,6 +287,8 @@ The script performs the following steps:
 3\. Waits for the delivery worker to process the event.
 
 4\. Retrieves the delivery status and attempt history.
+
+The following output illustrates the intended successful flow once the signing-secret mismatch is resolved.
 
 Expected output:
 
@@ -478,6 +483,44 @@ not a durable audit log. Lease-expiry cleanup does not increment the
 attempt-outcome counter. E2E latency includes only successful deliveries;
 a replay retains the original event creation time.
 
+### Local Prometheus monitoring
+
+Prometheus runs in Docker Compose while Spring Boot runs on the host machine. The Prometheus container scrapes `host.docker.internal:8080/actuator/prometheus` every 15 seconds.
+
+Start the application using the local setup instructions above, then start Prometheus:
+
+```bash
+docker compose config --quiet
+docker compose up -d prometheus
+docker compose ps
+curl -fsS http://localhost:9090/-/ready
+```
+
+Open `http://localhost:9090/targets` and confirm that the `webhook-relay` target reports `UP`. The Prometheus query UI is available at `http://localhost:9090/query`.
+
+The Prometheus UI is bound to `127.0.0.1:9090` for local development. Prometheus data is stored in the named `prometheus_data` Docker volume.
+
+### Example PromQL queries
+
+| Question | PromQL |
+| --- | --- |
+| Successful attempts (cumulative) | `webhook_delivery_attempts_total{result="success"}` |
+| Dead attempts (cumulative) | `webhook_delivery_attempts_total{result="dead"}` |
+| Successes over the last 5 minutes | `increase(webhook_delivery_attempts_total{result="success"}[5m])` |
+| Successful attempts per second | `rate(webhook_delivery_attempts_total{result="success"}[5m])` |
+| Estimated HTTP attempt duration p95 | `histogram_quantile(0.95, sum by (le) (rate(webhook_delivery_duration_seconds_bucket[5m])))` |
+| Successful E2E latency measurements | `webhook_delivery_e2e_latency_seconds_count` |
+| Pending deliveries | `webhook_deliveries_pending` |
+
+The p95 query estimates HTTP attempt latency from histogram buckets; it does not measure end-to-end latency. Small samples are not sufficient for performance benchmarking. Counter values are cumulative within an application process and may reset on restart.
+
+### Monitoring troubleshooting
+
+- **Target DOWN:** Confirm the application is running on port 8080 and that `/actuator/prometheus` responds. `host.docker.internal` lets the Docker Desktop container reach the host application.
+- **No recent query results:** Check the selected time range and whether requests occurred within the PromQL lookback window.
+- **No E2E latency observations:** This metric records successful deliveries only.
+- **HTTP 401 from the demo receiver:** The endpoint registration API generates a random signing secret, while the local mock receiver expects its configured `MOCK_RECEIVER_SECRET`. The existing demo can fail signature verification until these secrets are aligned. Do not disable signature verification as a production workaround.
+
 ## Testing
 
 Integration tests run against PostgreSQL 17 using Testcontainers. Docker must be running, but no manually configured test database is required.
@@ -586,10 +629,12 @@ GitHub Actions also runs the Gradle build and integration tests.
 - [x] v0.2 release
 - [x] Actuator health and Prometheus endpoints
 - [x] Custom delivery metrics with transaction-aware recording
+- [x] Local Prometheus scraping with Docker Compose
+- [x] PromQL verification for delivery outcomes and latency histograms
 
 ### Planned
 
-- [ ] Prometheus scraping and Grafana dashboards
+- [ ] Grafana dashboards and alerting rules
 - [ ] Reproducible load testing with k6
 - [ ] Additional receiver-outage and worker-crash tests
 - [ ] HTTPS demo deployment
