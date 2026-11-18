@@ -38,27 +38,16 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 ## Technology
 
 | Area | Current implementation |
-
 | --- | --- |
-
 | Language | Java 21 |
-
 | Framework | Spring Boot 4.1.1 |
-
 | Build | Gradle Wrapper |
-
 | Database access | Spring Data JPA, Spring JDBC, PostgreSQL JDBC driver |
-
 | Database | PostgreSQL 17 |
-
 | Schema migrations | Flyway |
-
 | Local infrastructure | Docker Compose |
-
 | Observability | Spring Boot Actuator, Micrometer, Prometheus exporter, Prometheus server (Docker Compose) |
-
 | Testing | JUnit 5, Spring Boot Test, Testcontainers (PostgreSQL 17), WireMock Standalone, Awaitility |
-
 | CI | GitHub Actions |
 
 **Planned:** Grafana dashboards, alerting rules, k6 load testing, and a public HTTPS deployment.
