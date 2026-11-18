@@ -118,15 +118,10 @@ Worker concurrency and expired-lease recovery are covered by integration tests u
 ## Data model
 
 | Table | Purpose |
-
 | --- | --- |
-
 | `endpoints` | Destination URL, signing secret, subscribed event types, active flag, optional rate limit |
-
 | `events` | Event type, JSON payload, optional idempotency key, creation time |
-
 | `deliveries` | One event-to-endpoint job: status, attempt count, retry schedule, lease, latest outcome |
-
 | `delivery_attempts` | Per-attempt HTTP status or transport error, duration, result-recording time |
 
 One event has many deliveries; one delivery has many attempts.
@@ -152,13 +147,9 @@ These rules protect stored data. API-level idempotency and valid worker state tr
 **Indexes**
 
 | Index | Query it supports |
-
 | --- | --- |
-
 | `(next_attempt_at, id) WHERE status = 'PENDING'` | Find due pending deliveries |
-
 | `(locked_until, id) WHERE status = 'IN_PROGRESS'` | Find expired worker leases |
-
 | `(endpoint_id)` | List deliveries for an endpoint |
 
 The partial indexes keep completed delivery history out of the active-job indexes. Their performance has not been benchmarked yet.
@@ -336,22 +327,14 @@ The JSON shown above is abbreviated. Actual responses also include IDs, timestam
 ### 6. API endpoints
 
 | Method | Endpoint | Description |
-
 | --- | --- | --- |
-
 | POST | `/endpoints` | Register a webhook endpoint |
-
 | GET | `/endpoints/{id}` | Retrieve endpoint information |
-
 | POST | `/events` | Publish an event and create delivery jobs |
-
 | GET | `/deliveries` | List deliveries with optional filters and pagination |
-
 | GET | `/deliveries/{id}` | Retrieve a delivery and its attempt history |
-
 | POST | `/deliveries/{id}/replay` | Replay an eligible dead-letter delivery |
 | POST | `/mock-receiver` | Local receiver for testing HTTP delivery |
-
 | GET | `/actuator/health` | Check application health |
 | GET | `/actuator/prometheus` | Export application and custom delivery metrics |
 
