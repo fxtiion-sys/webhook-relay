@@ -136,7 +136,8 @@ class DeliveryRetryHttpIntegrationTest extends PostgresIntegrationTest {
                 deliverySender,
                 resultService,
                 new TokenBucketRateLimiter(),
-                deliveryMetrics
+                deliveryMetrics,
+                "test-worker"
         );
 
         // Act: Process deliveries until retry succeeds.
@@ -242,7 +243,8 @@ class DeliveryRetryHttpIntegrationTest extends PostgresIntegrationTest {
                 deliverySender,
                 resultService,
                 new TokenBucketRateLimiter(),
-                deliveryMetrics
+                deliveryMetrics,
+                "test-worker"
         );
 
         // Act: Process until the retry succeeds.
@@ -339,7 +341,8 @@ class DeliveryRetryHttpIntegrationTest extends PostgresIntegrationTest {
                 deliverySender,
                 resultService,
                 new TokenBucketRateLimiter(),
-                deliveryMetrics
+                deliveryMetrics,
+                "test-worker"
         );
 
         // Act: Process the delivery once.

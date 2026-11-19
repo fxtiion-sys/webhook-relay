@@ -148,7 +148,8 @@ class DeliveryRateLimitHttpIntegrationTest extends PostgresIntegrationTest {
                 deliverySender,
                 resultService,
                 new TokenBucketRateLimiter(),
-                deliveryMetrics
+                deliveryMetrics,
+                "test-worker"
         );
 
         long deadline = System.nanoTime()
