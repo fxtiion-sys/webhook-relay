@@ -4,7 +4,7 @@ A webhook delivery service built with Java 21, Spring Boot, and PostgreSQL.
 
 Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoints, and processes them asynchronously using a database-backed worker. PostgreSQL acts as both the event store and the work queue, enabling transactional event ingestion without a separate message broker.
 
-> **Status: v0.2 released — v0.3 in development.** The local MVP includes retry policies, dead-letter handling, replay, event idempotency, HMAC-SHA256 signing, per-endpoint rate limiting, and observability. Local k6 load testing, multi-worker performance validation, and receiver-outage recovery testing have been completed. A public deployment is not yet available.
+> **Status: v0.2 released — v0.3 in development.** The local MVP includes retry policies, dead-letter handling, replay, event idempotency, HMAC-SHA256 signing, per-endpoint rate limiting, and observability. Local k6 load testing, multi-worker scalability validation, receiver-outage recovery, and real JVM worker-crash recovery have been completed. All 107 automated tests pass. A public deployment is not yet available.
 
 ## What's implemented
 
@@ -26,6 +26,7 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 - **Observability:** Actuator health and Prometheus endpoints, committed delivery outcome counters, HTTP and end-to-end latency histograms, and a periodically refreshed pending-delivery gauge.
 - **Load testing and scalability:** Reproducible k6 workloads, SQL-based delivery verification, and single-worker versus multi-worker benchmarks. Horizontal worker scaling reduced observed p95 end-to-end delivery latency by 96.7% while maintaining a 100% delivery success rate across 1,201 events.
 - **Receiver-outage recovery:** Automated integration testing and a reproducible failure-recovery script using an independent Python HTTP receiver. All 10 events accepted during a local receiver outage were successfully delivered after recovery, with zero missing or dead deliveries.
+- **Worker-crash recovery:** Reproducible process-level fault injection using independent JVM workers, SIGKILL, and natural lease expiration. An abandoned delivery was successfully recovered by a second worker without premature reclaim, with consistent attempt history and verified duplicate HTTP reception.
 
 ## Current limitations
 
@@ -35,7 +36,9 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 
 - Grafana dashboards and alerting rules are not yet configured.
 
-- Temporary receiver-outage recovery has been validated locally. Worker-crash recovery, prolonged receiver outages, and additional network-fault scenarios remain to be validated.
+- Temporary receiver-outage recovery and worker-crash recovery have been validated locally. Prolonged receiver outages, additional network-fault scenarios, and simultaneous infrastructure failures remain to be validated.
+
+- The system follows an at-least-once delivery model. Duplicate HTTP requests are possible, and receivers must implement idempotent processing to prevent duplicate business side effects.
 
 ## Technology
 
@@ -118,7 +121,9 @@ Therefore, receivers should implement idempotent processing to handle duplicate 
 
 - **Attempt history:** HTTP status codes, errors, and durations are recorded for delivery inspection.
 
-Worker concurrency and expired-lease recovery are covered by integration tests using PostgreSQL and Testcontainers.
+Worker concurrency, active lease protection, expired-lease recovery, and stale-result rejection are covered by PostgreSQL integration tests using Testcontainers.
+
+Process-level recovery has also been validated by terminating a real JVM worker during an in-flight HTTP request and recovering the abandoned delivery through an independent worker after natural lease expiration.
 
 ## Data model
 
@@ -574,6 +579,77 @@ These results demonstrate successful recovery from a temporary receiver outage w
 
 See [Receiver Outage and Recovery Testing](docs/receiver-outage.md) for the methodology, verification steps, observed results, and limitations.
 
+### Worker crash and lease recovery
+
+A reproducible process-level failure scenario validates recovery when a worker terminates unexpectedly during an in-flight HTTP delivery.
+
+The experiment runs two independent JVM workers against the same PostgreSQL database. Worker A is terminated using SIGKILL after the receiver accepts its first HTTP request but before the delivery result is persisted.
+
+Worker B respects the active lease, reclaims the abandoned delivery after natural lease expiration, and completes the delivery successfully.
+
+| Metric | Observed result |
+| --- | --- |
+| Failure injection | SIGKILL |
+| State after crash | IN_PROGRESS |
+| Configured lease duration | 30 seconds |
+| Premature reclaim | Not observed |
+| Natural lease expiration | Verified |
+| Recovery worker | Worker B |
+| Final delivery status | SUCCEEDED |
+| Claimed attempts | 2 |
+| Persisted attempt results | 1 |
+| Receiver HTTP requests | 2 |
+| Final HTTP status | 200 |
+| Request-to-request interval | 30.481 seconds |
+
+The first worker's committed claim survived process termination. The second worker recovered the delivery without manually modifying the lease timestamp.
+
+The receiver observed two requests with the same delivery ID, demonstrating duplicate reception under the at-least-once delivery model.
+
+The difference between claimed attempts and persisted attempt results is expected: the first worker terminated before recording its result.
+
+### Reproduce the worker-crash test
+
+Use an idle local PostgreSQL database without unfinished deliveries.
+
+The script requires Java 21, Python 3, Bash, Docker Compose, curl, jq, uuidgen, and lsof.
+
+Ensure ports 8081, 8082, and 8092 are available.
+
+```bash
+docker compose up -d postgres
+
+./gradlew bootJar
+
+./scripts/worker-crash-test.sh
+```
+
+The script manages both JVM worker processes and the independent HTTP receiver automatically.
+
+Database state, receiver logs, worker logs, and attempt history are preserved in a temporary evidence directory.
+
+The observed request-to-request interval is not a guaranteed recovery latency. Recovery depends on lease duration, worker availability, polling, and the remaining attempt budget.
+
+See [Worker Crash Recovery](docs/worker-crash-recovery.md) for the complete experiment methodology, observed results, database evidence, and limitations.
+
+### Reliability validation summary
+
+| Scenario | Observed result |
+| --- | --- |
+| Concurrent worker claiming | No duplicate ownership observed |
+| Local load testing | 2,564/2,564 successful deliveries |
+| Multi-worker scalability | 96.7% lower observed p95 E2E latency |
+| Temporary receiver outage | 10/10 successful deliveries after recovery |
+| Missing deliveries during receiver outage | 0 |
+| Unexpected JVM worker termination | Successfully recovered |
+| Active lease protection | Verified |
+| Natural lease expiration | Verified |
+| Stale worker result rejection | Verified through integration testing |
+| Duplicate HTTP reception | Observed and documented |
+| Automated regression tests | 107/107 passed |
+
+These results represent controlled local experiments and automated integration tests. They do not establish production availability guarantees, maximum sustainable throughput, or exactly-once delivery semantics.
+
 ## Testing
 
 Integration tests run against PostgreSQL 17 using Testcontainers. Docker must be running, but no manually configured test database is required.
@@ -583,17 +659,13 @@ Integration tests run against PostgreSQL 17 using Testcontainers. Docker must be
 Run the complete test suite:
 
 ```bash
-
 ./gradlew clean test
-
 ```
 
 Run the full build:
 
 ```bash
-
 ./gradlew clean build
-
 ```
 
 Run HTTP reliability integration tests only:
@@ -611,17 +683,19 @@ Run the local demo secret-resolution and HTTP integration tests:
 Run delivery query integration tests only:
 
 ```bash
-
 ./gradlew test --tests "*DeliveryQueryIntegrationTest"
-
 ```
 
 Run the receiver-outage recovery integration test:
 
 ```bash
-
 ./gradlew test --tests '*ReceiverOutageIntegrationTest'
+```
 
+Run worker concurrency, lease protection, recovery, and fencing integration tests:
+
+```bash
+./gradlew test --tests '*DeliveryWorkerIntegrationTest'
 ```
 
 ### Test coverage
@@ -633,7 +707,7 @@ The integration test suite covers:
 - **Event ingestion:** Event creation and transactional delivery job creation.
 - **HTTP delivery:** Sending webhook requests and recording delivery outcomes.
 - **Worker concurrency:** Multiple workers claiming jobs without duplicate ownership.
-- **Lease recovery:** Reclaiming expired leases and rejecting stale worker results.
+- **Lease protection and recovery:** Committed claim visibility, active lease protection, prevention of premature reclaim, expired lease recovery, attempt history consistency, and stale worker result rejection.
 - **Delivery queries:** Status filtering, endpoint filtering, and pagination.
 - **Delivery details:** Retrieving delivery metadata and attempt history in ascending attempt-number order.
 - **Error handling:** Returning a not-found error for nonexistent deliveries.
@@ -646,6 +720,21 @@ The integration test suite covers:
 - **Receiver-outage recovery:** Event acceptance during receiver unavailability, persisted delivery jobs, retryable transport failures, attempt history, and successful delivery after receiver restoration.
 
 The `DeliveryQueryIntegrationTest` class includes seven tests covering delivery queries, pagination, attempt history, and missing delivery handling.
+
+### Latest regression results
+
+The complete automated test suite was executed on November 24, 2026.
+
+| Metric | Result |
+| --- | ---: |
+| Total automated tests | 107 |
+| Passed | 107 |
+| Failures | 0 |
+| Errors | 0 |
+| Skipped | 0 |
+| Pass rate | 100% |
+
+Results were verified directly from the Gradle XML test reports.
 
 ### Test reports
 
@@ -669,7 +758,11 @@ GitHub Actions also runs the Gradle build and integration tests.
 
 - The new WireMock tests exercise selected HTTP failure paths, not every combination of replay, idempotency, signing, and rate limiting.
 
-- Temporary receiver-outage recovery has been validated through integration testing and an independent receiver process. Additional worker-crash, prolonged-outage, network-fault, and higher-load scenarios remain planned.
+- Temporary receiver-outage recovery and unexpected JVM worker termination have been validated through automated integration tests and independent process-level experiments.
+
+- Prolonged outages, simultaneous infrastructure failures, additional network faults, and higher-load recovery scenarios remain planned.
+
+- The worker-crash experiment validates one controlled failure scenario. It does not establish guaranteed recovery times or exactly-once external side effects.
 
 ## Roadmap
 
@@ -711,14 +804,24 @@ GitHub Actions also runs the Gradle build and integration tests.
 - [x] Independent HTTP receiver for failure simulation
 - [x] Automated receiver-outage and recovery script
 - [x] Zero-missing-delivery verification during temporary receiver outages
+- [x] Independent crash receiver with controlled response delays
+- [x] Automated JVM worker-crash recovery script
+- [x] Process-level fault injection using SIGKILL
+- [x] Active lease protection integration test
+- [x] Natural lease expiration and independent worker recovery
+- [x] Attempt history consistency verification after worker termination
+- [x] Duplicate HTTP reception validation
+- [x] Worker-crash recovery documentation
+- [x] Week 3 reliability and performance validation
+- [x] Full regression test suite — 107/107 passed
 
 ### Planned
 
 - [ ] Grafana dashboards and alerting rules
-- [ ] Worker-crash recovery validation
 - [ ] Additional prolonged-outage and network-fault scenarios
 - [ ] HTTPS demo deployment
 - [ ] Delivery history UI
+- [ ] v0.3 release
 
 ### Not included in v0.2
 

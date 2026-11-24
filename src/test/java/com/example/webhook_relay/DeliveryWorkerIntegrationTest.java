@@ -633,5 +633,91 @@ class DeliveryWorkerIntegrationTest extends PostgresIntegrationTest {
         assertEquals(successBefore, successMetricCount());
         assertEquals(e2eBefore, e2eMetricCount());
     }
-    
+
+    @Test
+    void activeLeaseShouldPreventPrematureReclaim() {
+        UUID deliveryId = createDelivery();
+
+        ClaimedDelivery firstClaim = claimDelivery(deliveryId);
+
+        assertEquals(1, firstClaim.attemptNo());
+
+        // A separate transaction observes the committed claim.
+        TransactionTemplate transaction =
+                new TransactionTemplate(transactionManager);
+
+        transaction.executeWithoutResult(status -> {
+            assertEquals(
+                    "IN_PROGRESS",
+                    jdbcTemplate.queryForObject(
+                            "SELECT status FROM deliveries WHERE id = ?",
+                            String.class,
+                            deliveryId
+                    )
+            );
+
+            assertEquals(
+                    1,
+                    jdbcTemplate.queryForObject(
+                            "SELECT attempt_count FROM deliveries WHERE id = ?",
+                            Integer.class,
+                            deliveryId
+                    ).intValue()
+            );
+
+            assertEquals(
+                    Boolean.TRUE,
+                    jdbcTemplate.queryForObject(
+                            """
+                            SELECT locked_until > now()
+                            FROM deliveries
+                            WHERE id = ?
+                            """,
+                            Boolean.class,
+                            deliveryId
+                    )
+            );
+
+            assertEquals(
+                    0,
+                    jdbcTemplate.queryForObject(
+                            """
+                            SELECT count(*)
+                            FROM delivery_attempts
+                            WHERE delivery_id = ?
+                            """,
+                            Integer.class,
+                            deliveryId
+                    ).intValue()
+            );
+        });
+
+        // Another claim operation must not reclaim an active lease.
+        boolean reclaimed = claimService.claimDeliveries()
+                .stream()
+                .anyMatch(d -> d.id().equals(deliveryId));
+
+        assertFalse(
+                reclaimed,
+                "An active lease must prevent premature reclaim"
+        );
+
+        assertEquals(
+                1,
+                jdbcTemplate.queryForObject(
+                        "SELECT attempt_count FROM deliveries WHERE id = ?",
+                        Integer.class,
+                        deliveryId
+                ).intValue()
+        );
+
+        Timestamp persistedLease = jdbcTemplate.queryForObject(
+                "SELECT locked_until FROM deliveries WHERE id = ?",
+                Timestamp.class,
+                deliveryId
+        );
+
+        assertNotNull(persistedLease);
+        assertEquals(firstClaim.lockedUntil(), persistedLease.toInstant());
+    }
 }
