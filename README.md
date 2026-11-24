@@ -4,7 +4,7 @@ A webhook delivery service built with Java 21, Spring Boot, and PostgreSQL.
 
 Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoints, and processes them asynchronously using a database-backed worker. PostgreSQL acts as both the event store and the work queue, enabling transactional event ingestion without a separate message broker.
 
-> **Status: v0.2 released.** The local MVP now includes exponential-backoff retries, dead-letter handling, replay, event idempotency, HMAC-SHA256 signing, per-endpoint rate limiting, and HTTP reliability integration tests. A public deployment is not yet available.
+> **Status: v0.2 released — v0.3 in development.** The local MVP includes retry policies, dead-letter handling, replay, event idempotency, HMAC-SHA256 signing, per-endpoint rate limiting, and observability. Local k6 load testing and multi-worker performance validation have been completed. A public deployment is not yet available.
 
 ## What's implemented
 
@@ -24,12 +24,13 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 - **Local demo:** `scripts/demo.sh` demonstrates endpoint registration, event publishing, worker processing, and delivery history retrieval; the local mock receiver resolves endpoint-specific HMAC secrets by delivery ID.
 - **Development workflow:** Gradle Wrapper, GitHub Actions, pull requests, branch protection, and Dependabot.
 - **Observability:** Actuator health and Prometheus endpoints, committed delivery outcome counters, HTTP and end-to-end latency histograms, and a periodically refreshed pending-delivery gauge.
+- **Load testing and scalability:** Reproducible k6 workloads, SQL-based delivery verification, and single-worker versus multi-worker benchmarks. Horizontal worker scaling reduced observed p95 end-to-end delivery latency by 96.7% while maintaining a 100% delivery success rate across 1,201 events.
 
 ## Current limitations
 
 - No publicly deployed demo.
 
-- Load testing and production performance benchmarks have not been completed.
+- Load testing has been completed in a local environment using a mock receiver. Production-scale performance and maximum sustainable throughput have not been established.
 
 - Grafana dashboards and alerting rules are not yet configured.
 
@@ -49,8 +50,10 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 | Observability | Spring Boot Actuator, Micrometer, Prometheus exporter, Prometheus server (Docker Compose) |
 | Testing | JUnit 5, Spring Boot Test, Testcontainers (PostgreSQL 17), WireMock Standalone, Awaitility |
 | CI | GitHub Actions |
+| Load testing | k6, PostgreSQL verification scripts |
 
-**Planned:** Grafana dashboards, alerting rules, k6 load testing, and a public HTTPS deployment.
+**Planned:** Grafana dashboards, alerting rules, additional failure-recovery testing, and a public HTTPS deployment.
+
 ## Delivery architecture
 
 ```mermaid
@@ -491,6 +494,52 @@ The p95 query estimates HTTP attempt latency from histogram buckets; it does not
 - **No E2E latency observations:** This metric records successful deliveries only.
 - **HTTP 401 from the demo receiver:** Confirm the application is running with the `local` profile and the request has a valid delivery UUID in `Webhook-Id`, a current `Webhook-Timestamp`, and an HMAC signature generated using that delivery endpoint’s secret. Unknown delivery IDs, missing headers, invalid signatures, and expired timestamps are rejected. Do not disable signature verification as a workaround.
 
+## Performance benchmarks
+
+Local load testing with k6 evaluated event ingestion performance, asynchronous delivery reliability, and horizontal worker scalability.
+
+### Single-worker vs. multi-worker
+
+Both configurations were tested at 20 events per second for 60 seconds using the same PostgreSQL-backed delivery queue.
+
+| Metric | Single-worker | Multi-worker |
+| --- | ---: | ---: |
+| Workers | 1 | 2 |
+| Published events | 1,201 | 1,201 |
+| Successful deliveries | 1,201 | 1,201 |
+| Delivery success rate | 100% | 100% |
+| API p95 latency | 17.46 ms | 17.39 ms |
+| Average E2E latency | 8,555.02 ms | 321.41 ms |
+| E2E p95 latency | 16,045.88 ms | 531.41 ms |
+| Retries | 0 | 0 |
+| Dead deliveries | 0 | 0 |
+
+Adding a second worker reduced observed p95 end-to-end delivery latency by **96.7%**, without modifying the Java implementation.
+
+The two workers processed 623 and 578 deliveries respectively, demonstrating near-even workload distribution through the shared PostgreSQL queue.
+
+Across all four local test runs, **2,564 out of 2,564 deliveries succeeded**, with no recorded retries or dead deliveries.
+
+### Reproduce the benchmark
+
+With k6 installed and the application running:
+
+```bash
+k6 run -e RATE=20 -e DURATION=60s scripts/load-test.js
+```
+
+Verify delivery outcomes and latency using PostgreSQL:
+
+```bash
+docker compose exec -T postgres sh -c \
+  'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < scripts/load-test-results.sql
+```
+
+These results represent individual local benchmark runs using a mock receiver. End-to-end latency is approximated using database timestamps. The results do not establish production performance guarantees or exactly-once delivery semantics.
+
+See [Load Testing and Performance Benchmarks](docs/load-testing.md) for the complete methodology, results, bottleneck analysis, and reproduction instructions.
+
 ## Testing
 
 Integration tests run against PostgreSQL 17 using Testcontainers. Docker must be running, but no manually configured test database is required.
@@ -576,7 +625,8 @@ GitHub Actions also runs the Gradle build and integration tests.
 - The delivery query tests primarily verify service-layer behavior; HTTP response behavior has also been manually tested.
 
 - The new WireMock tests exercise selected HTTP failure paths, not every combination of replay, idempotency, signing, and rate limiting.
-- Additional worker-crash, network-fault, and load tests are planned.
+
+- Additional worker-crash, receiver-outage, network-fault, and higher-load scenarios remain planned.
 
 ## Roadmap
 
@@ -609,11 +659,15 @@ GitHub Actions also runs the Gradle build and integration tests.
 - [x] Local Prometheus scraping with Docker Compose
 - [x] PromQL verification for delivery outcomes and latency histograms
 - [x] Local demo HMAC secret mismatch fix and regression tests
+- [x] Reproducible k6 load testing
+- [x] SQL-based delivery and latency verification
+- [x] Single-worker performance bottleneck analysis
+- [x] Multi-worker load testing and horizontal scalability validation
+- [x] Performance benchmark documentation
 
 ### Planned
 
 - [ ] Grafana dashboards and alerting rules
-- [ ] Reproducible load testing with k6
 - [ ] Additional receiver-outage and worker-crash tests
 - [ ] HTTPS demo deployment
 - [ ] Delivery history UI
