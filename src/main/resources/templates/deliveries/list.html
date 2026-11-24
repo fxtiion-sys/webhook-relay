@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en"
+      xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{fragments/layout :: layout('Delivery History', ~{::section})}">
+
+<body>
+
+<section class="delivery-page">
+
+    <div class="page-header">
+        <div>
+            <div class="eyebrow">MONITORING</div>
+            <h1>Delivery History</h1>
+            <p class="page-description">
+                Monitor and inspect webhook deliveries.
+            </p>
+        </div>
+
+        <a class="button button-secondary"
+           th:href="@{/ui/deliveries(
+               status=${selectedStatus},
+               endpointId=${endpointId},
+               page=${deliveries.number},
+               size=${pageSize}
+           )}">
+            Refresh
+        </a>
+    </div>
+
+    <div class="table-card">
+
+        <div class="table-toolbar">
+
+            <div class="filter-group">
+
+                <a class="filter-button"
+                   th:classappend="${selectedStatus == 'ALL'} ? ' selected' : ''"
+                   th:href="@{/ui/deliveries(
+                       endpointId=${endpointId},
+                       page=0,
+                       size=${pageSize}
+                   )}">
+                    All
+                </a>
+
+                <a th:each="status : ${statuses}"
+                   class="filter-button"
+                   th:classappend="${selectedStatus == status} ? ' selected' : ''"
+                   th:href="@{/ui/deliveries(
+                       status=${status},
+                       endpointId=${endpointId},
+                       page=0,
+                       size=${pageSize}
+                   )}"
+                   th:text="${status}">
+                </a>
+
+            </div>
+
+            <span class="result-count"
+                  th:text="${deliveries.totalElements + ' deliveries'}">
+            </span>
+
+        </div>
+
+        <div class="active-filter"
+             th:if="${endpointId != null}">
+
+            <span th:text="${'Endpoint: ' + endpointId}"></span>
+
+            <a th:href="@{/ui/deliveries(
+                status=${selectedStatus},
+                page=0,
+                size=${pageSize}
+            )}">
+                Clear
+            </a>
+
+        </div>
+
+        <div class="table-wrapper"
+             th:unless="${deliveries.empty}">
+
+            <table class="delivery-table">
+
+                <thead>
+                <tr>
+                    <th>Delivery ID</th>
+                    <th>Endpoint ID</th>
+                    <th>Status</th>
+                    <th>Attempts</th>
+                    <th>HTTP Code</th>
+                    <th>Created At (UTC) ↓</th>
+                </tr>
+                </thead>
+
+                <tbody>
+
+                <tr th:each="delivery : ${deliveries.content}">
+
+                    <td>
+                        <span class="delivery-id"
+                              th:title="${delivery.id()}"
+                              th:text="${#strings.substring(delivery.id().toString(), 0, 8) + '…'}">
+                        </span>
+                    </td>
+
+                    <td>
+                        <span class="endpoint-id"
+                              th:title="${delivery.endpointId()}"
+                              th:text="${#strings.substring(delivery.endpointId().toString(), 0, 8) + '…'}">
+                        </span>
+                    </td>
+
+                    <td>
+                        <span class="status-badge"
+                              th:classappend="${' status-' + #strings.toLowerCase(delivery.status())}"
+                              th:text="${delivery.status()}">
+                        </span>
+                    </td>
+
+                    <td th:text="${delivery.attemptCount()}">
+                    </td>
+
+                    <td>
+                        <span th:text="${delivery.lastStatusCode() != null ? delivery.lastStatusCode() : '—'}">
+                        </span>
+                    </td>
+
+                    <td class="timestamp"
+                        th:text="${delivery.createdAt() != null
+                            ? #temporals.format(delivery.createdAt(), 'yyyy-MM-dd HH:mm:ss', 'UTC')
+                            : '—'}">
+                    </td>
+
+                </tr>
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+        <div class="empty-state"
+             th:if="${deliveries.empty}">
+
+            <div class="empty-icon">▤</div>
+
+            <h2>No deliveries found</h2>
+
+            <p>
+                No webhook deliveries match the current filters or page.
+            </p>
+
+            <a class="button button-secondary"
+               th:href="@{/ui/deliveries}">
+                Reset filters
+            </a>
+
+        </div>
+
+        <div class="pagination">
+
+            <span class="pagination-info"
+                  th:text="${deliveries.totalPages == 0
+                      ? '0 pages'
+                      : 'Page ' + (deliveries.number + 1) + ' of ' + deliveries.totalPages}">
+            </span>
+
+            <div class="pagination-actions">
+
+                <a class="button button-secondary"
+                   th:if="${deliveries.hasPrevious()}"
+                   th:href="@{/ui/deliveries(
+                       status=${selectedStatus},
+                       endpointId=${endpointId},
+                       page=${deliveries.number - 1},
+                       size=${pageSize}
+                   )}">
+                    Previous
+                </a>
+
+                <span class="button disabled"
+                      th:unless="${deliveries.hasPrevious()}"
+                      aria-disabled="true">
+                    Previous
+                </span>
+
+                <a class="button button-secondary"
+                   th:if="${deliveries.hasNext()}"
+                   th:href="@{/ui/deliveries(
+                       status=${selectedStatus},
+                       endpointId=${endpointId},
+                       page=${deliveries.number + 1},
+                       size=${pageSize}
+                   )}">
+                    Next
+                </a>
+
+                <span class="button disabled"
+                      th:unless="${deliveries.hasNext()}"
+                      aria-disabled="true">
+                    Next
+                </span>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <footer class="page-footer">
+        Webhook Relay · Delivery Monitoring
+    </footer>
+
+</section>
+
+</body>
+</html>
