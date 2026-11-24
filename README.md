@@ -4,7 +4,7 @@ A webhook delivery service built with Java 21, Spring Boot, and PostgreSQL.
 
 Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoints, and processes them asynchronously using a database-backed worker. PostgreSQL acts as both the event store and the work queue, enabling transactional event ingestion without a separate message broker.
 
-> **Status: v0.2 released — v0.3 in development.** The local MVP includes retry policies, dead-letter handling, replay, event idempotency, HMAC-SHA256 signing, per-endpoint rate limiting, and observability. Local k6 load testing and multi-worker performance validation have been completed. A public deployment is not yet available.
+> **Status: v0.2 released — v0.3 in development.** The local MVP includes retry policies, dead-letter handling, replay, event idempotency, HMAC-SHA256 signing, per-endpoint rate limiting, and observability. Local k6 load testing, multi-worker performance validation, and receiver-outage recovery testing have been completed. A public deployment is not yet available.
 
 ## What's implemented
 
@@ -25,6 +25,7 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 - **Development workflow:** Gradle Wrapper, GitHub Actions, pull requests, branch protection, and Dependabot.
 - **Observability:** Actuator health and Prometheus endpoints, committed delivery outcome counters, HTTP and end-to-end latency histograms, and a periodically refreshed pending-delivery gauge.
 - **Load testing and scalability:** Reproducible k6 workloads, SQL-based delivery verification, and single-worker versus multi-worker benchmarks. Horizontal worker scaling reduced observed p95 end-to-end delivery latency by 96.7% while maintaining a 100% delivery success rate across 1,201 events.
+- **Receiver-outage recovery:** Automated integration testing and a reproducible failure-recovery script using an independent Python HTTP receiver. All 10 events accepted during a local receiver outage were successfully delivered after recovery, with zero missing or dead deliveries.
 
 ## Current limitations
 
@@ -34,7 +35,7 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 
 - Grafana dashboards and alerting rules are not yet configured.
 
-- Additional receiver-outage and worker-crash scenarios remain planned.
+- Temporary receiver-outage recovery has been validated locally. Worker-crash recovery, prolonged receiver outages, and additional network-fault scenarios remain to be validated.
 
 ## Technology
 
@@ -51,6 +52,7 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 | Testing | JUnit 5, Spring Boot Test, Testcontainers (PostgreSQL 17), WireMock Standalone, Awaitility |
 | CI | GitHub Actions |
 | Load testing | k6, PostgreSQL verification scripts |
+| Failure-recovery testing | Bash, Python 3 standard library, curl, jq, WireMock, Awaitility |
 
 **Planned:** Grafana dashboards, alerting rules, additional failure-recovery testing, and a public HTTPS deployment.
 
@@ -540,6 +542,38 @@ These results represent individual local benchmark runs using a mock receiver. E
 
 See [Load Testing and Performance Benchmarks](docs/load-testing.md) for the complete methodology, results, bottleneck analysis, and reproduction instructions.
 
+## Failure-recovery validation
+
+### Receiver outage and recovery
+
+A reproducible local failure scenario validates delivery recovery when an independent HTTP receiver becomes temporarily unavailable.
+
+The test stops the receiver, publishes events while it is offline, verifies that failed deliveries remain eligible for retry, and restores the receiver without restarting Webhook Relay.
+
+| Metric | Observed result |
+| --- | ---: |
+| Accepted events | 10 |
+| Successful deliveries | 10 |
+| Missing deliveries | 0 |
+| Dead deliveries | 0 |
+| Recovery rate | 100% |
+
+Accepted event IDs, persisted delivery records, and receiver-side delivery IDs are compared to verify that no accepted event is missing from the recovered delivery set.
+
+### Reproduce the outage test
+
+With PostgreSQL and Webhook Relay running locally, install Python 3, Bash, curl, jq, and uuidgen if they are not already available.
+
+Run:
+
+    ./scripts/receiver-outage-test.sh
+
+The script manages the independent receiver process automatically and preserves verification evidence in a temporary directory.
+
+These results demonstrate successful recovery from a temporary receiver outage within the configured retry budget. They do not establish exactly-once delivery or guarantee recovery from every failure scenario.
+
+See [Receiver Outage and Recovery Testing](docs/receiver-outage.md) for the methodology, verification steps, observed results, and limitations.
+
 ## Testing
 
 Integration tests run against PostgreSQL 17 using Testcontainers. Docker must be running, but no manually configured test database is required.
@@ -582,6 +616,14 @@ Run delivery query integration tests only:
 
 ```
 
+Run the receiver-outage recovery integration test:
+
+```bash
+
+./gradlew test --tests '*ReceiverOutageIntegrationTest'
+
+```
+
 ### Test coverage
 
 The integration test suite covers:
@@ -601,6 +643,7 @@ The integration test suite covers:
 - **Signing:** HMAC-SHA256 signature generation and verification against transmitted request bytes.
 - **Local demo HMAC resolution:** PostgreSQL-backed delivery-to-endpoint secret lookup, unknown/malformed delivery IDs, and HTTP `200`/`401` behavior using Spring MVC integration tests.
 - **Rate limiting:** Per-endpoint token-bucket behavior and HTTP-level delivery deferral.
+- **Receiver-outage recovery:** Event acceptance during receiver unavailability, persisted delivery jobs, retryable transport failures, attempt history, and successful delivery after receiver restoration.
 
 The `DeliveryQueryIntegrationTest` class includes seven tests covering delivery queries, pagination, attempt history, and missing delivery handling.
 
@@ -626,7 +669,7 @@ GitHub Actions also runs the Gradle build and integration tests.
 
 - The new WireMock tests exercise selected HTTP failure paths, not every combination of replay, idempotency, signing, and rate limiting.
 
-- Additional worker-crash, receiver-outage, network-fault, and higher-load scenarios remain planned.
+- Temporary receiver-outage recovery has been validated through integration testing and an independent receiver process. Additional worker-crash, prolonged-outage, network-fault, and higher-load scenarios remain planned.
 
 ## Roadmap
 
@@ -664,11 +707,16 @@ GitHub Actions also runs the Gradle build and integration tests.
 - [x] Single-worker performance bottleneck analysis
 - [x] Multi-worker load testing and horizontal scalability validation
 - [x] Performance benchmark documentation
+- [x] Receiver-outage recovery integration test
+- [x] Independent HTTP receiver for failure simulation
+- [x] Automated receiver-outage and recovery script
+- [x] Zero-missing-delivery verification during temporary receiver outages
 
 ### Planned
 
 - [ ] Grafana dashboards and alerting rules
-- [ ] Additional receiver-outage and worker-crash tests
+- [ ] Worker-crash recovery validation
+- [ ] Additional prolonged-outage and network-fault scenarios
 - [ ] HTTPS demo deployment
 - [ ] Delivery history UI
 
