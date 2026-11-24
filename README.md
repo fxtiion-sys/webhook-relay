@@ -4,7 +4,7 @@ A webhook delivery service built with Java 21, Spring Boot, and PostgreSQL.
 
 Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoints, and processes them asynchronously using a database-backed worker. PostgreSQL acts as both the event store and the work queue, enabling transactional event ingestion without a separate message broker.
 
-> **Status: v0.2 released — v0.3 in development.** The local MVP includes retry policies, dead-letter handling, replay, event idempotency, HMAC-SHA256 signing, per-endpoint rate limiting, and observability. Local k6 load testing, multi-worker scalability validation, receiver-outage recovery, and real JVM worker-crash recovery have been completed. All 107 automated tests pass. A public deployment is not yet available.
+> **Status: v0.3 — Observability & Tests.** Webhook Relay includes reliable asynchronous delivery, retry policies, dead-letter handling, replay, event idempotency, HMAC-SHA256 signing, per-endpoint rate limiting, Prometheus metrics, and structured worker logging. Local load testing, multi-worker scalability validation, receiver-outage recovery, and real JVM worker-crash recovery have been completed. All 107 automated tests pass. A public deployment is not yet available.
 
 ## What's implemented
 
@@ -393,33 +393,25 @@ curl -X POST http://localhost:8080/events \\
 #### List deliveries
 
 ```bash
-
 curl "http://localhost:8080/deliveries?page=0&size=10"
-
 ```
 
 Filter by status:
 
 ```bash
-
 curl "http://localhost:8080/deliveries?status=SUCCEEDED"
-
 ```
 
 Filter by endpoint:
 
 ```bash
-
 curl "http://localhost:8080/deliveries?endpointId=<endpoint-uuid>"
-
 ```
 
 #### Retrieve delivery details
 
 ```bash
-
 curl "http://localhost:8080/deliveries/<delivery-uuid>"
-
 ```
 
 The response includes delivery metadata and an `attempts` array ordered by attempt number.
@@ -429,9 +421,7 @@ The response includes delivery metadata and an `attempts` array ordered by attem
 Stop the Spring Boot application with `Ctrl+C`, then run:
 
 ```bash
-
 docker compose stop
-
 ```
 
 The database volume is preserved. Running `docker compose down -v` deletes the database volume and its data.
@@ -814,6 +804,7 @@ GitHub Actions also runs the Gradle build and integration tests.
 - [x] Worker-crash recovery documentation
 - [x] Week 3 reliability and performance validation
 - [x] Full regression test suite — 107/107 passed
+- [x] v0.3 observability, performance, and reliability validation
 
 ### Planned
 
@@ -821,7 +812,6 @@ GitHub Actions also runs the Gradle build and integration tests.
 - [ ] Additional prolonged-outage and network-fault scenarios
 - [ ] HTTPS demo deployment
 - [ ] Delivery history UI
-- [ ] v0.3 release
 
 ### Not included in v0.2
 
@@ -831,5 +821,6 @@ Kafka/SQS, Kubernetes, a client SDK, and multi-tenant authentication.
 
 - **[v0.1](https://github.com/fxtiion-sys/webhook-relay/releases/tag/v0.1):** Local MVP with event ingestion, asynchronous delivery, delivery queries, and a runnable demo.
 - **[v0.2](https://github.com/fxtiion-sys/webhook-relay/releases/tag/v0.2):** Reliability and security improvements, including retry policies, dead-letter handling, replay, idempotency, signing, rate limiting, and HTTP integration tests.
+- **[v0.3](https://github.com/fxtiion-sys/webhook-relay/releases/tag/v0.3):** Observability and reliability validation, including Prometheus metrics, transaction-aware metric recording, structured worker logging, k6 load testing, horizontal worker scalability, receiver-outage recovery, JVM worker-crash recovery, and 107 passing automated tests.
 
 Progress is tracked in [GitHub Issues](https://github.com/fxtiion-sys/webhook-relay/issues) and [Milestones](https://github.com/fxtiion-sys/webhook-relay/milestones).
