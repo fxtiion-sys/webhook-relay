@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en"
+      xmlns:th="http://www.thymeleaf.org"
+      th:fragment="layout(pageTitle, content)">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title th:text="${pageTitle + ' | Webhook Relay'}">
+        Webhook Relay
+    </title>
+
+    <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+
+<body>
+
+<div class="app-shell">
+
+    <aside class="sidebar">
+
+        <a class="brand" th:href="@{/ui/deliveries}">
+            <span class="brand-icon">W</span>
+
+            <span class="brand-text">
+                <strong>Webhook Relay</strong>
+                <small>Operations Console</small>
+            </span>
+        </a>
+
+        <div class="nav-label">WORKSPACE</div>
+
+        <nav class="navigation">
+            <a class="nav-item active"
+               th:href="@{/ui/deliveries}"
+               aria-current="page">
+                <span class="nav-icon">▤</span>
+                Deliveries
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <span class="version-dot"></span>
+            Webhook Relay · v0.3
+        </div>
+
+    </aside>
+
+    <div class="main-shell">
+
+        <header class="topbar">
+            <span class="breadcrumb">
+                Workspace / Deliveries
+            </span>
+
+            <span class="console-label">
+                Operations Console
+            </span>
+        </header>
+
+        <main class="main-content">
+            <th:block th:replace="${content}"></th:block>
+        </main>
+
+    </div>
+
+</div>
+
+</body>
+</html>

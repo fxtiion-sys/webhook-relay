@@ -4,7 +4,7 @@ A webhook delivery service built with Java 21, Spring Boot, and PostgreSQL.
 
 Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoints, and processes them asynchronously using a database-backed worker. PostgreSQL acts as both the event store and the work queue, enabling transactional event ingestion without a separate message broker.
 
-> **Status: v0.3 — Observability & Tests.** Webhook Relay includes reliable asynchronous delivery, retry policies, dead-letter handling, replay, event idempotency, HMAC-SHA256 signing, per-endpoint rate limiting, Prometheus metrics, and structured worker logging. Local load testing, multi-worker scalability validation, receiver-outage recovery, and real JVM worker-crash recovery have been completed. All 107 automated tests pass. A public deployment is not yet available.
+> **Status: v0.3 released — Operations UI in development.** Webhook Relay includes reliable asynchronous delivery, retry policies, dead-letter handling, replay, event idempotency, HMAC-SHA256 signing, per-endpoint rate limiting, Prometheus metrics, and structured worker logging. Local load testing, multi-worker scalability validation, receiver-outage recovery, and real JVM worker-crash recovery have been completed. The current development version includes a server-rendered delivery history UI with status filtering and pagination. All 130 automated tests pass. A public deployment is not yet available.
 
 ## What's implemented
 
@@ -20,17 +20,24 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 - **Webhook authentication:** Sign outgoing requests with HMAC-SHA256 and verify signatures with a timestamp freshness window and constant-time comparison. The local demo receiver selects the correct endpoint secret using the delivery ID.
 - **Rate limiting:** Apply per-endpoint token-bucket limits and defer deliveries when capacity is exhausted without issuing an HTTP request.
 - **Delivery history API:** List deliveries with status filtering, endpoint filtering, and pagination; retrieve individual deliveries with their attempt history.
-- **Testing:** JUnit 5, Testcontainers, WireMock Standalone, and Awaitility tests covering database integrity, concurrency, retries, HTTP timeouts, terminal failures, signing, and rate limiting.
+- **Testing:** 130 automated tests using JUnit 5, Testcontainers, WireMock Standalone, Awaitility, MockMvc, and Mockito, covering database integrity, concurrency, retries, HTTP timeouts, terminal failures, signing, rate limiting, and MVC request validation and HTML rendering.
 - **Local demo:** `scripts/demo.sh` demonstrates endpoint registration, event publishing, worker processing, and delivery history retrieval; the local mock receiver resolves endpoint-specific HMAC secrets by delivery ID.
 - **Development workflow:** Gradle Wrapper, GitHub Actions, pull requests, branch protection, and Dependabot.
 - **Observability:** Actuator health and Prometheus endpoints, committed delivery outcome counters, HTTP and end-to-end latency histograms, and a periodically refreshed pending-delivery gauge.
 - **Load testing and scalability:** Reproducible k6 workloads, SQL-based delivery verification, and single-worker versus multi-worker benchmarks. Horizontal worker scaling reduced observed p95 end-to-end delivery latency by 96.7% while maintaining a 100% delivery success rate across 1,201 events.
 - **Receiver-outage recovery:** Automated integration testing and a reproducible failure-recovery script using an independent Python HTTP receiver. All 10 events accepted during a local receiver outage were successfully delivered after recovery, with zero missing or dead deliveries.
 - **Worker-crash recovery:** Reproducible process-level fault injection using independent JVM workers, SIGKILL, and natural lease expiration. An abandoned delivery was successfully recovered by a second worker without premature reclaim, with consistent attempt history and verified duplicate HTTP reception.
+- **Delivery history UI:** Server-rendered operations console built with Thymeleaf and CSS, featuring status filtering, optional endpoint filtering, pagination, UTC timestamps, color-coded delivery statuses, and empty-state handling.
+
 
 ## Current limitations
 
 - No publicly deployed demo.
+
+- The operations console currently supports delivery history inspection only. Delivery detail views, attempt history visualization, and replay actions through the UI are planned.
+
+- The operations console does not currently provide authentication or authorization and is intended for local development and demonstration.
+
 
 - Load testing has been completed in a local environment using a mock receiver. Production-scale performance and maximum sustainable throughput have not been established.
 
@@ -46,13 +53,14 @@ Webhook Relay accepts events, creates delivery jobs for subscribed HTTP endpoint
 | --- | --- |
 | Language | Java 21 |
 | Framework | Spring Boot 4.1.1 |
+| Presentation layer | Spring MVC, Thymeleaf, HTML5, CSS3 |
 | Build | Gradle Wrapper |
 | Database access | Spring Data JPA, Spring JDBC, PostgreSQL JDBC driver |
 | Database | PostgreSQL 17 |
 | Schema migrations | Flyway |
 | Local infrastructure | Docker Compose |
 | Observability | Spring Boot Actuator, Micrometer, Prometheus exporter, Prometheus server (Docker Compose) |
-| Testing | JUnit 5, Spring Boot Test, Testcontainers (PostgreSQL 17), WireMock Standalone, Awaitility |
+| Testing | JUnit 5, Spring Boot Test, Testcontainers (PostgreSQL 17), WireMock Standalone, Awaitility, MockMvc, Mockito |
 | CI | GitHub Actions |
 | Load testing | k6, PostgreSQL verification scripts |
 | Failure-recovery testing | Bash, Python 3 standard library, curl, jq, WireMock, Awaitility |
@@ -416,7 +424,44 @@ curl "http://localhost:8080/deliveries/<delivery-uuid>"
 
 The response includes delivery metadata and an `attempts` array ordered by attempt number.
 
-### 7. Stop
+### 7. Delivery History UI
+
+Webhook Relay provides a server-rendered operations console for monitoring webhook deliveries.
+
+Once the application is running locally, open:
+
+[http://localhost:8080/ui/deliveries](http://localhost:8080/ui/deliveries)
+
+#### Features
+
+- Paginated delivery history with newest-first ordering and deterministic sorting
+- Status filtering: `PENDING`, `IN_PROGRESS`, `SUCCEEDED`, and `DEAD`
+- Optional endpoint ID filtering through query parameters
+- Delivery attempt counts and last HTTP response codes
+- UTC timestamps and color-coded delivery statuses
+- Filter-preserving pagination and manual refresh
+- Empty-state handling and request parameter validation
+- Responsive layout built with Thymeleaf and CSS
+
+The UI reuses the existing delivery query service and repository without duplicating business logic or changing the REST API contract.
+
+#### Example URLs
+
+| URL | Description |
+| --- | --- |
+| `/ui/deliveries` | View all deliveries |
+| `/ui/deliveries?status=DEAD` | View dead-letter deliveries |
+| `/ui/deliveries?status=SUCCEEDED` | View successful deliveries |
+| `/ui/deliveries?page=1&size=20` | View the second page |
+| `/ui/deliveries?status=DEAD&page=1&size=10` | Filtered pagination |
+
+Pagination uses zero-based page numbers. The default page size is 10, and supported page sizes range from 1 to 100.
+
+Invalid status values, negative page numbers, invalid page sizes, and malformed endpoint UUIDs return HTTP `400`.
+
+The operations console is intended for local development and demonstration. Authentication and authorization are not currently provided.
+
+### 8. Stop
 
 Stop the Spring Boot application with `Ctrl+C`, then run:
 
@@ -624,19 +669,19 @@ See [Worker Crash Recovery](docs/worker-crash-recovery.md) for the complete expe
 
 ### Reliability validation summary
 
-| Scenario | Observed result |
-| --- | --- |
-| Concurrent worker claiming | No duplicate ownership observed |
-| Local load testing | 2,564/2,564 successful deliveries |
-| Multi-worker scalability | 96.7% lower observed p95 E2E latency |
+| Scenario | Observed result                            |
+| --- |--------------------------------------------|
+| Concurrent worker claiming | No duplicate ownership observed            |
+| Local load testing | 2,564/2,564 successful deliveries          |
+| Multi-worker scalability | 96.7% lower observed p95 E2E latency       |
 | Temporary receiver outage | 10/10 successful deliveries after recovery |
-| Missing deliveries during receiver outage | 0 |
-| Unexpected JVM worker termination | Successfully recovered |
-| Active lease protection | Verified |
-| Natural lease expiration | Verified |
-| Stale worker result rejection | Verified through integration testing |
-| Duplicate HTTP reception | Observed and documented |
-| Automated regression tests | 107/107 passed |
+| Missing deliveries during receiver outage | 0                                          |
+| Unexpected JVM worker termination | Successfully recovered                     |
+| Active lease protection | Verified                                   |
+| Natural lease expiration | Verified                                   |
+| Stale worker result rejection | Verified through integration testing       |
+| Duplicate HTTP reception | Observed and documented                    |
+| Automated regression tests | 130/130 passed                              |
 
 These results represent controlled local experiments and automated integration tests. They do not establish production availability guarantees, maximum sustainable throughput, or exactly-once delivery semantics.
 
@@ -688,6 +733,14 @@ Run worker concurrency, lease protection, recovery, and fencing integration test
 ./gradlew test --tests '*DeliveryWorkerIntegrationTest'
 ```
 
+Run delivery history UI MVC tests:
+
+```bash
+./gradlew test --tests '*DeliveryUiControllerTest'
+```
+
+The MVC tests use `@WebMvcTest`, MockMvc, and Mockito to validate controller behavior and Thymeleaf rendering without requiring a running PostgreSQL database.
+
 ### Test coverage
 
 The integration test suite covers:
@@ -699,6 +752,7 @@ The integration test suite covers:
 - **Worker concurrency:** Multiple workers claiming jobs without duplicate ownership.
 - **Lease protection and recovery:** Committed claim visibility, active lease protection, prevention of premature reclaim, expired lease recovery, attempt history consistency, and stale worker result rejection.
 - **Delivery queries:** Status filtering, endpoint filtering, and pagination.
+- **Delivery history UI:** Request parameter validation, status normalization, endpoint filtering, pagination boundaries, deterministic sorting, model attributes, Thymeleaf HTML rendering, empty states, and pagination links.
 - **Delivery details:** Retrieving delivery metadata and attempt history in ascending attempt-number order.
 - **Error handling:** Returning a not-found error for nonexistent deliveries.
 - **Retries and terminal failures:** Real HTTP `500 → 500 → 200`, timeout → success, and `400 → DEAD` scenarios with WireMock and Awaitility.
@@ -710,6 +764,7 @@ The integration test suite covers:
 - **Receiver-outage recovery:** Event acceptance during receiver unavailability, persisted delivery jobs, retryable transport failures, attempt history, and successful delivery after receiver restoration.
 
 The `DeliveryQueryIntegrationTest` class includes seven tests covering delivery queries, pagination, attempt history, and missing delivery handling.
+The `DeliveryUiControllerTest` class includes 23 test executions covering MVC request handling, validation, service interactions, model attributes, and rendered HTML.
 
 ### Latest regression results
 
@@ -717,8 +772,10 @@ The complete automated test suite was executed on November 24, 2026.
 
 | Metric | Result |
 | --- | ---: |
-| Total automated tests | 107 |
-| Passed | 107 |
+| Previous regression baseline | 107 |
+| New MVC test executions | 23 |
+| Total automated tests | 130 |
+| Passed | 130 |
 | Failures | 0 |
 | Errors | 0 |
 | Skipped | 0 |
@@ -805,13 +862,21 @@ GitHub Actions also runs the Gradle build and integration tests.
 - [x] Week 3 reliability and performance validation
 - [x] Full regression test suite — 107/107 passed
 - [x] v0.3 observability, performance, and reliability validation
+- [x] Server-rendered delivery history UI with Thymeleaf
+- [x] Status filtering and filter-preserving pagination
+- [x] Reusable UI layout and responsive CSS
+- [x] MVC request validation and empty-state handling
+- [x] Delivery history UI automated MVC tests
+- [x] Full regression test suite — 130/130 passed
 
 ### Planned
 
 - [ ] Grafana dashboards and alerting rules
 - [ ] Additional prolonged-outage and network-fault scenarios
 - [ ] HTTPS demo deployment
-- [ ] Delivery history UI
+- [ ] Delivery detail UI with attempt history
+- [ ] Dead-letter replay through the operations console
+- [ ] OpenAPI documentation and Swagger UI
 
 ### Not included in v0.2
 
